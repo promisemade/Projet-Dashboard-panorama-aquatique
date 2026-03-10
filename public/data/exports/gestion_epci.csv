@@ -1,0 +1,63 @@
+﻿epci_code,epci_nom,code_departement,departement,bassins_total,bassins_dsp,bassins_regie,bassins_prive_hors_dsp,surface_totale_bassins_m2,surface_dsp_bassins_m2,surface_regie_bassins_m2,surface_autre_hors_dsp_bassins_m2,part_dsp_bassins,part_regie_bassins,part_autre_hors_dsp_bassins
+200071785,CA Chauny-Tergnier-La Fère,2,Aisne,5,1,2,2,1142.0,375.0,368.0,399.0,0.2,0.4,0.4
+200072031,CA de la Région de Château-Thierry,2,Aisne,4,3,0,1,727.4,650.5,0.0,76.9,0.75,0.0,0.25
+200043495,CA du Pays de Laon,2,Aisne,5,3,2,0,1099.0,510.0,589.0,0.0,0.6,0.4,0.0
+200071892,CA du Saint-Quentinois,2,Aisne,10,5,5,0,1680.4,500.4,1180.0,0.0,0.5,0.5,0.0
+200071991,CC Retz-en-Valois,2,Aisne,5,0,2,3,898.5,0.0,562.5,336.0,0.0,0.4,0.6
+200071983,CC Thiérache Sambre et Oise,2,Aisne,1,0,0,1,280.0,0.0,0.0,280.0,0.0,0.0,1.0
+240200576,CC de la Champagne Picarde,2,Aisne,2,0,1,1,399.0,0.0,250.0,149.0,0.0,0.5,0.5
+240200600,CC des Trois Rivières,2,Aisne,2,2,0,0,600.0,600.0,0.0,0.0,1.0,0.0,0.0
+240200493,CC du Pays du Vermandois,2,Aisne,2,0,2,0,481.5,0.0,481.5,0.0,0.0,1.0,0.0
+200044618,CA Douaisis Agglo,59,Nord,10,1,9,0,2676.5,825.0,1851.5,0.0,0.1,0.9,0.0
+200043396,CA Maubeuge Val de Sambre,59,Nord,9,0,9,0,2099.5,0.0,2099.5,0.0,0.0,1.0,0.0
+245901160,CA Valenciennes Métropole,59,Nord,4,0,4,0,989.0,0.0,989.0,0.0,0.0,1.0,0.0
+200068500,CA de Cambrai,59,Nord,6,0,6,0,1675.0,0.0,1675.0,0.0,0.0,1.0,0.0
+200042190,CA de la Porte du Hainaut,59,Nord,9,6,3,0,2418.9,1858.9,560.0,0.0,0.6666666666666666,0.3333333333333333,0.0
+200030633,CA du Caudrésis et du Catésis,59,Nord,8,4,0,4,969.0,594.0,0.0,375.0,0.5,0.0,0.5
+245901152,CC Cœur d'Ostrevent,59,Nord,1,0,1,0,250.0,0.0,250.0,0.0,0.0,1.0,0.0
+200043263,CC Cœur de l'Avesnois,59,Nord,2,0,2,0,387.5,0.0,387.5,0.0,0.0,1.0,0.0
+200041960,CC Pévèle-Carembault,59,Nord,6,4,1,1,689.5,375.0,250.0,64.5,0.6666666666666666,0.1666666666666667,0.1666666666666667
+200040947,CC de Flandre Intérieure,59,Nord,2,0,2,0,437.5,0.0,437.5,0.0,0.0,1.0,0.0
+200040954,CC des Hauts de Flandre,59,Nord,2,2,0,0,725.0,725.0,0.0,0.0,1.0,0.0,0.0
+245901038,CC du Pays Solesmois,59,Nord,2,0,2,0,468.5,0.0,468.5,0.0,0.0,1.0,0.0
+200043404,CC du Sud Avesnois,59,Nord,2,0,2,0,675.0,0.0,675.0,0.0,0.0,1.0,0.0
+245900428,CU de Dunkerque,59,Nord,14,0,14,0,4521.0,0.0,4521.0,0.0,0.0,1.0,0.0
+200093201,Métropole Européenne de Lille,59,Nord,43,10,32,1,12152.4,2228.0,9549.400000000001,375.0,0.2325581395348837,0.7441860465116279,0.02325581395348837
+200068047,CA Creil Sud Oise,60,Oise,1,0,1,0,250.0,0.0,250.0,0.0,0.0,1.0,0.0
+200067965,CA de la Région de Compiègne et de la Basse Automne,60,Oise,4,0,4,0,1075.0,0.0,1075.0,0.0,0.0,1.0,0.0
+200067999,CA du Beauvaisis,60,Oise,9,0,9,0,1860.0,0.0,1860.0,0.0,0.0,1.0,0.0
+200066975,CC Senlis Sud Oise,60,Oise,1,0,1,0,312.5,0.0,312.5,0.0,0.0,1.0,0.0
+200067973,CC Thelloise,60,Oise,2,2,0,0,410.0,410.0,0.0,0.0,1.0,0.0,0.0
+246000764,CC de l'Aire Cantilienne,60,Oise,4,4,0,0,775.0,775.0,0.0,0.0,1.0,0.0,0.0
+200068005,CC de l'Oise Picarde,60,Oise,2,2,0,0,516.5,516.5,0.0,0.0,1.0,0.0,0.0
+246000848,CC de la Picardie Verte,60,Oise,2,0,2,0,600.0,0.0,600.0,0.0,0.0,1.0,0.0
+246000897,CC de la Plaine d'Estrées,60,Oise,4,4,0,0,281.0,281.0,0.0,0.0,1.0,0.0,0.0
+246000772,CC des Deux Vallées,60,Oise,1,0,1,0,250.0,0.0,250.0,0.0,0.0,1.0,0.0
+246000921,CC des Pays d'Oise et d'Halatte,60,Oise,1,0,1,0,312.5,0.0,312.5,0.0,0.0,1.0,0.0
+246000582,CC des Sablons,60,Oise,2,0,0,2,456.5,0.0,0.0,456.5,0.0,0.0,1.0
+246000756,CC du Pays Noyonnais,60,Oise,2,0,2,0,437.5,0.0,437.5,0.0,0.0,1.0,0.0
+246000855,CC du Pays des Sources,60,Oise,1,0,0,1,396.0,0.0,0.0,396.0,0.0,0.0,1.0
+200090751,CA Grand Calais Terres et Mers,62,Pas-de-Calais,8,0,8,0,1415.0,0.0,1415.0,0.0,0.0,1.0,0.0
+246200299,CA d'Hénin-Carvin,62,Pas-de-Calais,3,1,2,0,769.0,375.0,394.0,0.0,0.3333333333333333,0.6666666666666666,0.0
+200072460,"CA de Béthune-Bruay, Artois-Lys Romane",62,Pas-de-Calais,16,6,9,1,5793.0,2653.0,2727.5,412.5,0.375,0.5625,0.0625
+246200364,CA de Lens - Liévin,62,Pas-de-Calais,11,8,3,0,3173.5,2536.0,637.5,0.0,0.7272727272727273,0.2727272727272727,0.0
+200069029,CA des Deux Baies en Montreuillois,62,Pas-de-Calais,4,0,2,2,1000.0,0.0,500.0,500.0,0.0,0.5,0.5
+246200729,CA du Boulonnais,62,Pas-de-Calais,7,0,5,2,1534.0,0.0,784.0,750.0,0.0,0.7142857142857143,0.2857142857142857
+200069037,CA du Pays de Saint-Omer,62,Pas-de-Calais,7,4,3,0,2088.0,1428.0,660.0,0.0,0.5714285714285714,0.4285714285714285,0.0
+200044048,CC Osartis Marquion,62,Pas-de-Calais,4,0,4,0,809.0,0.0,809.0,0.0,0.0,1.0,0.0
+200072478,CC Pays d'Opale,62,Pas-de-Calais,1,0,0,1,46.6,0.0,0.0,46.6,0.0,0.0,1.0
+200018083,CC de Desvres-Samer,62,Pas-de-Calais,2,0,0,2,750.0,0.0,0.0,750.0,0.0,0.0,1.0
+246200844,CC de la Région d'Audruicq,62,Pas-de-Calais,1,0,1,0,250.0,0.0,250.0,0.0,0.0,1.0,0.0
+200044030,CC des 7 Vallées,62,Pas-de-Calais,3,0,3,0,330.0,0.0,330.0,0.0,0.0,1.0,0.0
+246201016,CC du Pays de Lumbres,62,Pas-de-Calais,2,0,2,0,600.0,0.0,600.0,0.0,0.0,1.0,0.0
+200035442,CC du Sud-Artois,62,Pas-de-Calais,1,0,1,0,250.0,0.0,250.0,0.0,0.0,1.0,0.0
+200069672,CC du Ternois,62,Pas-de-Calais,4,0,3,1,821.0,0.0,725.0,96.0,0.0,0.75,0.25
+200033579,CU d'Arras,62,Pas-de-Calais,5,0,5,0,1345.0,0.0,1345.0,0.0,0.0,1.0,0.0
+248000531,CA Amiens Métropole,80,Somme,11,3,7,1,4013.0,1770.0,2043.0,200.0,0.2727272727272727,0.6363636363636364,0.09090909090909091
+200070993,CA de la Baie de Somme,80,Somme,4,4,0,0,1805.0,1805.0,0.0,0.0,1.0,0.0,0.0
+200070969,CC Avre Luce Noye,80,Somme,3,0,3,0,525.5,0.0,525.5,0.0,0.0,1.0,0.0
+200070985,CC de l'Est de la Somme,80,Somme,2,1,0,1,500.0,250.0,0.0,250.0,0.5,0.0,0.5
+200037059,CC de la Haute Somme (Combles - Péronne - Roisel),80,Somme,2,0,2,0,625.0,0.0,625.0,0.0,0.0,1.0,0.0
+200070977,CC du Grand Roye,80,Somme,1,0,1,0,313.0,0.0,313.0,0.0,0.0,1.0,0.0
+248000747,CC du Pays du Coquelicot,80,Somme,1,0,1,0,250.0,0.0,250.0,0.0,0.0,1.0,0.0
+200070944,CC du Vimeu,80,Somme,1,0,0,1,0.0,0.0,0.0,0.0,0.0,0.0,1.0
