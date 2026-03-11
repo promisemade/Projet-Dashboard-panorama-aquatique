@@ -665,14 +665,34 @@ function App() {
 
     async function loadDashboard() {
       try {
-        const response = await fetch(`${import.meta.env.BASE_URL}data/dashboard.json`, {
+        const dashboardUrl = `${import.meta.env.BASE_URL}data/dashboard.json?v=${encodeURIComponent(
+          __APP_BUILD_ID__,
+        )}`;
+        const response = await fetch(dashboardUrl, {
+          cache: "no-store",
           signal: controller.signal,
         });
         if (!response.ok) {
           throw new Error(`Impossible de charger les données (${response.status}).`);
         }
-        const payload = (await response.json()) as DashboardData;
-        setData(payload);
+        const payload = (await response.json()) as Partial<DashboardData>;
+        const normalizedPayload = {
+          ...payload,
+          notes: Array.isArray(payload.notes) ? payload.notes : [],
+          departments: Array.isArray(payload.departments) ? payload.departments : [],
+          epci: Array.isArray(payload.epci) ? payload.epci : [],
+          communes: Array.isArray(payload.communes) ? payload.communes : [],
+          basins: Array.isArray(payload.basins) ? payload.basins : [],
+          epci_management: Array.isArray(payload.epci_management) ? payload.epci_management : [],
+          epci_schools: Array.isArray(payload.epci_schools) ? payload.epci_schools : [],
+          school_basins: Array.isArray(payload.school_basins) ? payload.school_basins : [],
+          age_sex: Array.isArray(payload.age_sex) ? payload.age_sex : [],
+          sex_2024: Array.isArray(payload.sex_2024) ? payload.sex_2024 : [],
+          sources: Array.isArray(payload.sources) ? payload.sources : [],
+          extended_inventory: Array.isArray(payload.extended_inventory) ? payload.extended_inventory : [],
+          downloads: Array.isArray(payload.downloads) ? payload.downloads : [],
+        } as DashboardData;
+        setData(normalizedPayload);
       } catch (loadError) {
         if (loadError instanceof Error && loadError.name !== "AbortError") {
           setError(loadError.message);
@@ -786,7 +806,7 @@ function App() {
       return [];
     }
 
-    return data.extended_inventory.filter(
+    return (data.extended_inventory ?? []).filter(
       (item) => selectedDepartment === "all" || item.dep_code === selectedDepartment,
     );
   }, [data, selectedDepartment]);
