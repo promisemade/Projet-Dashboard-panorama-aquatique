@@ -17,12 +17,29 @@ import {
 } from "recharts";
 import { CircleMarker, MapContainer, Popup, TileLayer } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
+import {
+  INVESTIGATION_PRIORITY_WEIGHTS,
+  QUADRANT_THRESHOLD,
+  SCORING_CONFIG,
+  buildInvestigationHypothesis,
+  buildPriorityDrivers,
+  calculatePriorityScore,
+  classifyInvestigationProfile,
+  getInvestigationContribution,
+  getQuadrantBucket,
+  getInvestigationScoreByLens,
+  getPriorityToneClass,
+  getQuadrantColor,
+  type InvestigationLens,
+  type InvestigationScoreDefinition,
+} from "./scoring";
 import type {
   AgeSexRecord,
   BasinRecord,
   CommuneRecord,
   DashboardData,
   EpciRecord,
+  ExtendedInventoryRecord,
   GenericRecord,
   Overview,
 } from "./types";
@@ -49,12 +66,13 @@ type RawSheetKey =
   | "school_basins"
   | "age_sex"
   | "sex_2024"
-  | "sources";
+  | "sources"
+  | "extended_inventory";
 
 type DashboardTab = "overview" | "territories" | "facilities" | "licences" | "data";
-type InvestigationLens = "priority" | "offer_gap" | "pressure" | "impact";
-type InvestigationComponentLens = Exclude<InvestigationLens, "priority">;
-type InvestigationIndexKey = "offerGapIndex" | "pressureIndex" | "impactIndex";
+type OverviewView = "panorama" | "social";
+type TerritoriesView = "investigation" | "comparisons" | "territory";
+type FacilitiesView = "map" | "scope" | "physical" | "inventory" | "territories";
 
 interface RawSheetDefinition {
   key: RawSheetKey;
@@ -71,6 +89,7 @@ interface PreparedRawSheet extends RawSheetDefinition {
 }
 
 type MetricKind = "count" | "ratio" | "percent";
+type InventoryCountMode = "equipments" | "installations";
 
 interface MetricOption {
   key: MetricKey;
@@ -84,6 +103,75 @@ interface TerritoryMetricsSummary {
   surfaceM2Pour1000Hab: number;
   licencesFfnPour100M2: number;
   communesSansBassinParmiLicenciees: number;
+}
+
+interface InventoryScopeSummary {
+  equipmentsTotal: number;
+  installationsTotal: number;
+  bassinFamilyEquipmentsTotal: number;
+  bassinFamilyInstallationsTotal: number;
+  nonBassinFamilyEquipmentsTotal: number;
+  nonBassinFamilyInstallationsTotal: number;
+  familiesTotal: number;
+  typesTotal: number;
+  activitiesTotal: number;
+}
+
+interface InventoryCountableRecord {
+  id_equipement: string;
+  id_installation: string;
+}
+
+interface InventoryTypedRecord extends InventoryCountableRecord {
+  type_equipement: string | null | undefined;
+}
+
+interface InventoryActivityRecord extends InventoryCountableRecord {
+  activites: string | null | undefined;
+}
+
+type ComparableProfileScope =
+  | "all"
+  | "sport_25"
+  | "sport_50"
+  | "ludique"
+  | "mixte"
+  | "fosse"
+  | "specialized";
+
+type ComparableBasinContext = "all" | "school" | "qpv";
+
+interface ComparableProfileSummary {
+  equipmentCount: number;
+  installationCount: number;
+  averageLength: number;
+  averageSurface: number;
+  averageLanes: number;
+  averageMaxDepth: number;
+}
+
+interface LicenceTrendRow {
+  code: string;
+  label: string;
+  licences2023: number;
+  licences2024: number;
+  delta: number;
+  deltaShare: number;
+}
+
+interface QpvFragilityRow {
+  epci_code: string;
+  epci_nom: string;
+  departement: string;
+  qpvCount: number;
+  qpvPopulation: number;
+  qpvShare: number;
+  bassinsQpv: number;
+  bassinsQpv200m: number;
+  bassinsParQpv: number;
+  coveragePer100kQpv: number;
+  directCoveragePer100kQpv: number;
+  fragilityScore: number;
 }
 
 interface InvestigationProfileRow {
@@ -114,15 +202,6 @@ interface InvestigationProfileRow {
 }
 
 type InvestigationRankLookup = Record<InvestigationLens, Map<string, number>>;
-
-interface InvestigationScoreDefinition {
-  lens: InvestigationComponentLens;
-  indexKey: InvestigationIndexKey;
-  label: string;
-  weight: number;
-  description: string;
-  metrics: string[];
-}
 
 const METRIC_OPTIONS: MetricOption[] = [
   {
@@ -241,15 +320,15 @@ const RAW_SHEET_DEFINITIONS: RawSheetDefinition[] = [
     key: "school_basins",
     label: "08 Bassins scolaires",
     sheetName: "08_Bassins_scolaires",
-    description: "Détail des bassins repérés comme liés à des usages scolaires.",
+    description: "D\u00e9tail des bassins rep\u00e9r\u00e9s comme li\u00e9s \u00e0 des usages scolaires.",
     exportSlug: "bassins_scolaires",
     getRows: (data) => toRawRows(data.school_basins),
   },
   {
     key: "age_sex",
-    label: "09 Âges x sexe",
+    label: "09 \u00c2ges x sexe",
     sheetName: "09_Ages_dep_sexe",
-    description: "Distribution départementale des licences FFN 2024 par âge et sexe.",
+    description: "Distribution d\u00e9partementale des licences FFN 2024 par \u00e2ge et sexe.",
     exportSlug: "ages_dep_sexe",
     getRows: (data) => toRawRows(data.age_sex),
   },
@@ -268,6 +347,15 @@ const RAW_SHEET_DEFINITIONS: RawSheetDefinition[] = [
     description: "Sources, filtres et définitions métier utilisés dans le classeur.",
     exportSlug: "sources",
     getRows: (data) => toRawRows(data.sources),
+  },
+  {
+    key: "extended_inventory",
+    label: "12 Data ES élargie",
+    sheetName: "Extraction complémentaire",
+    description:
+      "Extraction Data ES non filtrée à l'échelle des installations marquées piscine, normalisée pour le web.",
+    exportSlug: "equipements_sportifs_non_filtres",
+    getRows: (data) => toRawRows(data.extended_inventory),
   },
 ];
 
@@ -298,13 +386,27 @@ const MANAGEMENT_COLORS: Record<string, string> = {
   "Autre gestion hors DSP": "#1f4e70",
 };
 
+const CORE_AQUATIC_TYPES = new Set([
+  "Bassin sportif de natation",
+  "Bassin ludique de natation",
+  "Bassin mixte de natation",
+]);
+const SURFACE_BUCKETS = [
+  { label: "< 100 m²", min: 0, max: 100 },
+  { label: "100 à 249 m²", min: 100, max: 250 },
+  { label: "250 à 499 m²", min: 250, max: 500 },
+  { label: "500 à 999 m²", min: 500, max: 1000 },
+  { label: "1 000 m² et +", min: 1000, max: Number.POSITIVE_INFINITY },
+] as const;
+const LENGTH_BUCKETS = [
+  { label: "< 15 m", min: 0, max: 15 },
+  { label: "15 à 24 m", min: 15, max: 25 },
+  { label: "25 à 49 m", min: 25, max: 50 },
+  { label: "50 m et +", min: 50, max: Number.POSITIVE_INFINITY },
+] as const;
 const RAW_PAGE_SIZE = 20;
+const INVESTIGATION_PAGE_SIZE = 10;
 const RANKING_LIMIT_OPTIONS = [12, 25, 50, 100] as const;
-const INVESTIGATION_PRIORITY_WEIGHTS: Record<InvestigationComponentLens, number> = {
-  offer_gap: 0.34,
-  pressure: 0.38,
-  impact: 0.28,
-};
 const INVESTIGATION_LENS_OPTIONS: Array<{ key: InvestigationLens; label: string; description: string }> = [
   {
     key: "priority",
@@ -368,8 +470,6 @@ const INVESTIGATION_SCORE_DEFINITIONS: InvestigationScoreDefinition[] = [
     ],
   },
 ];
-const QUADRANT_THRESHOLD = 60;
-
 const TAB_OPTIONS: Array<{ key: DashboardTab; label: string; description: string }> = [
   {
     key: "overview",
@@ -383,8 +483,8 @@ const TAB_OPTIONS: Array<{ key: DashboardTab; label: string; description: string
   },
   {
     key: "facilities",
-    label: "Bassins",
-    description: "Explorer le parc aquatique, ses gestions, ses usages scolaires et sa cartographie.",
+    label: "Équipements",
+    description: "Explorer le parc aquatique, ses équipements, ses usages scolaires et sa cartographie.",
   },
   {
     key: "licences",
@@ -397,23 +497,162 @@ const TAB_OPTIONS: Array<{ key: DashboardTab; label: string; description: string
     description: "Accéder à la méthode, aux exports et au détail brut des feuilles du classeur.",
   },
 ];
+const COMPARABLE_PROFILE_SCOPE_OPTIONS: Array<{
+  key: ComparableProfileScope;
+  label: string;
+  description: string;
+}> = [
+  {
+    key: "all",
+    label: "Tous profils",
+    description: "Voir tout le parc et ses écarts de structure.",
+  },
+  {
+    key: "sport_25",
+    label: "Formats 25 m",
+    description: "Bassins sportifs 25 m et grands formats 25 m assimilés.",
+  },
+  {
+    key: "sport_50",
+    label: "Formats 50 m",
+    description: "Bassins sportifs 50 m et grands formats 50 m assimilés.",
+  },
+  {
+    key: "ludique",
+    label: "Ludiques",
+    description: "Bassins d'agrément, récréatifs ou peu profonds.",
+  },
+  {
+    key: "mixte",
+    label: "Mixtes",
+    description: "Bassins combinant logiques sportives et récréatives.",
+  },
+  {
+    key: "fosse",
+    label: "Fosses",
+    description: "Plongée, plongeon et grands volumes profonds.",
+  },
+  {
+    key: "specialized",
+    label: "Spécialisés",
+    description: "Formats courts, toboggans et autres bassins particuliers.",
+  },
+];
+const COMPARABLE_BASIN_CONTEXT_OPTIONS: Array<{
+  key: ComparableBasinContext;
+  label: string;
+  description: string;
+}> = [
+  {
+    key: "all",
+    label: "Tous les bassins",
+    description: "Lecture complète de la famille comparable retenue.",
+  },
+  {
+    key: "school",
+    label: "Bassins scolaires",
+    description: "Ne garder que les équipements où un usage scolaire est repéré.",
+  },
+  {
+    key: "qpv",
+    label: "Bassins proches QPV",
+    description: "Ne garder que les équipements en QPV ou à moins de 200 m.",
+  },
+];
+const OVERVIEW_VIEW_OPTIONS: Array<{
+  key: OverviewView;
+  label: string;
+  description: string;
+}> = [
+  {
+    key: "panorama",
+    label: "Panorama",
+    description: "Rep\u00e8res globaux, signaux rapides et comparaison d\u00e9partementale.",
+  },
+  {
+    key: "social",
+    label: "Enjeux sociaux",
+    description: "Lecture QPV du p\u00e9rim\u00e8tre actif et fragilit\u00e9 sociale par EPCI.",
+  },
+];
+const TERRITORIES_VIEW_OPTIONS: Array<{
+  key: TerritoriesView;
+  label: string;
+  description: string;
+}> = [
+  {
+    key: "investigation",
+    label: "Repérage",
+    description: "Priorisation, quadrants et table exhaustive des EPCI.",
+  },
+  {
+    key: "comparisons",
+    label: "Comparaisons",
+    description: "Face-à-face entre EPCI et comparaison de bassins équivalents.",
+  },
+  {
+    key: "territory",
+    label: "Fiche territoire",
+    description: "Lecture synthétique d'un territoire avec ses repères et points d'appui.",
+  },
+];
+const FACILITIES_VIEW_OPTIONS: Array<{
+  key: FacilitiesView;
+  label: string;
+  description: string;
+}> = [
+  {
+    key: "map",
+    label: "Carte",
+    description: "Carte, filtres actifs et répartition immédiate du parc affiché.",
+  },
+  {
+    key: "scope",
+    label: "Périmètre",
+    description: "Socle bassins, lecture Data ES élargie et repères de couverture.",
+  },
+  {
+    key: "physical",
+    label: "Propriétés",
+    description: "Tailles, longueurs, couloirs et intensité physique du parc.",
+  },
+  {
+    key: "inventory",
+    label: "Familles & activités",
+    description: "Lecture complète des familles, types, configurations et activités.",
+  },
+  {
+    key: "territories",
+    label: "Territoires",
+    description: "Surface par habitant et lecture territoriale par EPCI.",
+  },
+];
 
 function App() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<DashboardTab>("overview");
+  const [overviewView, setOverviewView] = useState<OverviewView>("panorama");
+  const [territoriesView, setTerritoriesView] = useState<TerritoriesView>("investigation");
+  const [facilitiesView, setFacilitiesView] = useState<FacilitiesView>("map");
   const [selectedDepartment, setSelectedDepartment] = useState("all");
   const [selectedEpciCode, setSelectedEpciCode] = useState("all");
+  const [selectedComparisonEpciCode, setSelectedComparisonEpciCode] = useState("all");
   const [selectedMetric, setSelectedMetric] = useState<MetricKey>("bassins_total");
   const [investigationLens, setInvestigationLens] = useState<InvestigationLens>("priority");
   const [rankingLimit, setRankingLimit] = useState<(typeof RANKING_LIMIT_OPTIONS)[number]>(25);
   const [managementFilter, setManagementFilter] = useState("all");
   const [basinUsageFilter, setBasinUsageFilter] = useState("all");
+  const [localityTypeFilter, setLocalityTypeFilter] = useState("all");
+  const [inventoryCountMode, setInventoryCountMode] = useState<InventoryCountMode>("installations");
+  const [comparableProfileScope, setComparableProfileScope] = useState<ComparableProfileScope>("all");
+  const [comparableBasinContext, setComparableBasinContext] = useState<ComparableBasinContext>("all");
   const [epciSearch, setEpciSearch] = useState("");
   const [basinSearch, setBasinSearch] = useState("");
   const [selectedRawSheet, setSelectedRawSheet] = useState<RawSheetKey>("epci");
   const [rawSearch, setRawSearch] = useState("");
   const [rawPage, setRawPage] = useState(1);
+  const [investigationPage, setInvestigationPage] = useState(1);
   const territoryPanelRef = useRef<HTMLElement | null>(null);
   const pendingTerritoryJumpRef = useRef(false);
 
@@ -448,6 +687,10 @@ function App() {
   useEffect(() => {
     setRawPage(1);
   }, [deferredRawSearch, selectedDepartment, selectedRawSheet]);
+
+  useEffect(() => {
+    setInvestigationPage(1);
+  }, [deferredEpciSearch, investigationLens, selectedDepartment]);
 
   const departmentOptions = data?.departments ?? [];
   const departmentLabel =
@@ -495,6 +738,15 @@ function App() {
     );
   }, [data, selectedDepartment]);
 
+  const communeTypologyLookup = useMemo(() => {
+    const baseCommunes = data?.communes ?? [];
+    return new Map(
+      baseCommunes
+        .filter((item) => selectedDepartment === "all" || item.code_departement === selectedDepartment)
+        .map((item) => [item.code_commune, formatCommuneTypology(item.typo)]),
+    );
+  }, [data, selectedDepartment]);
+
   const filteredBasins = useMemo(() => {
     return scopedBasins
       .filter((item) => managementFilter === "all" || item.mode_gestion_calcule === managementFilter)
@@ -507,6 +759,11 @@ function App() {
         }
         return true;
       })
+      .filter(
+        (item) =>
+          localityTypeFilter === "all" ||
+          (communeTypologyLookup.get(item.code_commune) ?? "Non renseigné") === localityTypeFilter,
+      )
       .filter((item) => {
         if (!deferredBasinSearch) {
           return true;
@@ -515,7 +772,69 @@ function App() {
           .toLowerCase()
           .includes(deferredBasinSearch);
       });
-  }, [basinUsageFilter, deferredBasinSearch, managementFilter, scopedBasins]);
+  }, [
+    basinUsageFilter,
+    communeTypologyLookup,
+    deferredBasinSearch,
+    localityTypeFilter,
+    managementFilter,
+    scopedBasins,
+  ]);
+
+  const scopedExtendedInventory = useMemo(() => {
+    if (!data) {
+      return [];
+    }
+
+    return data.extended_inventory.filter(
+      (item) => selectedDepartment === "all" || item.dep_code === selectedDepartment,
+    );
+  }, [data, selectedDepartment]);
+
+  const filteredExtendedInventory = useMemo(() => {
+    return scopedExtendedInventory
+      .filter(
+        (item) =>
+          localityTypeFilter === "all" ||
+          (communeTypologyLookup.get(item.code_commune) ??
+            formatCommuneTypology(item.typologie_commune_source)) === localityTypeFilter,
+      )
+      .filter((item) => {
+        if (!deferredBasinSearch) {
+          return true;
+        }
+
+        return [
+          item.installation,
+          item.equipement,
+          item.commune,
+          item.epci_nom,
+          item.type_equipement,
+          item.famille_equipement,
+          item.particularite_installation,
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(deferredBasinSearch);
+      });
+  }, [communeTypologyLookup, deferredBasinSearch, localityTypeFilter, scopedExtendedInventory]);
+
+  const comparableScopedBasins = useMemo(() => {
+    return scopedBasins
+      .filter(
+        (item) =>
+          localityTypeFilter === "all" ||
+          (communeTypologyLookup.get(item.code_commune) ?? "Non renseigné") === localityTypeFilter,
+      )
+      .filter((item) => {
+        if (!deferredBasinSearch) {
+          return true;
+        }
+        return `${item.installation} ${item.equipement} ${item.commune} ${item.epci_nom} ${item.type_equipement}`
+          .toLowerCase()
+          .includes(deferredBasinSearch);
+      });
+  }, [communeTypologyLookup, deferredBasinSearch, localityTypeFilter, scopedBasins]);
 
   const filteredCommunes = useMemo(() => {
     if (!data) {
@@ -525,6 +844,12 @@ function App() {
       (item) => selectedDepartment === "all" || item.code_departement === selectedDepartment,
     );
   }, [data, selectedDepartment]);
+
+  const availableLocalityTypes = useMemo(() => {
+    return Array.from(new Set(filteredCommunes.map((item) => formatCommuneTypology(item.typo)))).sort((a, b) =>
+      a.localeCompare(b, "fr"),
+    );
+  }, [filteredCommunes]);
 
   const filteredSex = useMemo(() => {
     if (!data) {
@@ -576,9 +901,122 @@ function App() {
     };
   }, [data, filteredCommunes, filteredDepartments, filteredSex, scopedEpci, selectedDepartment]);
 
+  const licenceTrendSummary = useMemo(() => {
+    const licences2023 = sumBy(filteredDepartments, "licences_ffn_2023");
+    const licences2024 = sumBy(filteredDepartments, "licences_ffn_2024_dep");
+    const delta = licences2024 - licences2023;
+
+    return {
+      licences2023,
+      licences2024,
+      delta,
+      deltaShare: safeDivide(delta, licences2023),
+    };
+  }, [filteredDepartments]);
+
+  const licenceTrendRows = useMemo<LicenceTrendRow[]>(() => {
+    return [...filteredDepartments]
+      .map((item) => {
+        const delta = item.licences_ffn_2024_dep - item.licences_ffn_2023;
+        return {
+          code: item.code_departement,
+          label: item.departement,
+          licences2023: item.licences_ffn_2023,
+          licences2024: item.licences_ffn_2024_dep,
+          delta,
+          deltaShare: safeDivide(delta, item.licences_ffn_2023),
+        };
+      })
+      .sort((left, right) => right.delta - left.delta);
+  }, [filteredDepartments]);
+
+  const qpvScopeSummary = useMemo(() => {
+    const qpvPopulation = sumBy(filteredDepartments, "pop_qpv");
+    const qpvCount = sumBy(scopedEpci, "nb_qpv");
+    const bassinsQpv = sumBy(scopedEpci, "bassins_qpv");
+    const bassinsQpv200m = sumBy(scopedEpci, "bassins_qpv_200m");
+
+    return {
+      qpvPopulation,
+      qpvCount,
+      bassinsQpv,
+      bassinsQpv200m,
+      qpvPopulationShare: currentOverview ? safeDivide(qpvPopulation, currentOverview.population_total) : 0,
+      bassinsParQpv: safeDivide(bassinsQpv200m, qpvCount),
+      coveragePer100kQpv: safeDivide(bassinsQpv200m, qpvPopulation) * 100000,
+      directCoveragePer100kQpv: safeDivide(bassinsQpv, qpvPopulation) * 100000,
+    };
+  }, [currentOverview, filteredDepartments, scopedEpci]);
+
+  const qpvFragilityRows = useMemo<QpvFragilityRow[]>(() => {
+    const rows = scopedEpci
+      .filter((item) => item.pop_qpv > 0 || item.nb_qpv > 0)
+      .map((item) => ({
+        epci_code: item.epci_code,
+        epci_nom: item.epci_nom,
+        departement: item.departement,
+        qpvCount: item.nb_qpv,
+        qpvPopulation: item.pop_qpv,
+        qpvShare: item.part_population_qpv,
+        bassinsQpv: item.bassins_qpv,
+        bassinsQpv200m: item.bassins_qpv_200m,
+        bassinsParQpv: safeDivide(item.bassins_qpv_200m, item.nb_qpv),
+        coveragePer100kQpv: safeDivide(item.bassins_qpv_200m, item.pop_qpv) * 100000,
+        directCoveragePer100kQpv: safeDivide(item.bassins_qpv, item.pop_qpv) * 100000,
+        fragilityScore: 0,
+      }));
+
+    if (rows.length === 0) {
+      return [];
+    }
+
+    const qpvShareRankMap = buildRankMap(rows, (item) => item.qpvShare);
+    const qpvPopulationRankMap = buildRankMap(rows, (item) => item.qpvPopulation);
+    const qpvCoverageRankMap = buildRankMap(rows, (item) => item.coveragePer100kQpv);
+    const qpvDirectCoverageRankMap = buildRankMap(rows, (item) => item.directCoveragePer100kQpv);
+
+    return rows
+      .map((item) => ({
+        ...item,
+        fragilityScore:
+          average([
+            qpvShareRankMap.get(item.epci_code) ?? 0,
+            qpvPopulationRankMap.get(item.epci_code) ?? 0,
+            1 - (qpvCoverageRankMap.get(item.epci_code) ?? 0),
+            1 - (qpvDirectCoverageRankMap.get(item.epci_code) ?? 0),
+          ]) * 100,
+      }))
+      .sort((left, right) => right.fragilityScore - left.fragilityScore);
+  }, [scopedEpci]);
+
+  const qpvFragilityChartRows = useMemo(
+    () =>
+      qpvFragilityRows.slice(0, 8).map((item) => ({
+        epci_code: item.epci_code,
+        epci_nom: shortenEpci(item.epci_nom, 34),
+        fullLabel: `${item.epci_nom} (${shortDepartment(item.departement)})`,
+        value: item.fragilityScore,
+        kind: "count" as const,
+        seriesLabel: "Fragilité sociale QPV",
+      })),
+    [qpvFragilityRows],
+  );
+
   const activeMetricOption = METRIC_OPTIONS.find((item) => item.key === selectedMetric) ?? METRIC_OPTIONS[0];
   const activeInvestigationLens =
     INVESTIGATION_LENS_OPTIONS.find((item) => item.key === investigationLens) ?? INVESTIGATION_LENS_OPTIONS[0];
+  const activeComparableProfileScope =
+    COMPARABLE_PROFILE_SCOPE_OPTIONS.find((item) => item.key === comparableProfileScope) ??
+    COMPARABLE_PROFILE_SCOPE_OPTIONS[0];
+  const activeComparableBasinContext =
+    COMPARABLE_BASIN_CONTEXT_OPTIONS.find((item) => item.key === comparableBasinContext) ??
+    COMPARABLE_BASIN_CONTEXT_OPTIONS[0];
+  const activeOverviewView =
+    OVERVIEW_VIEW_OPTIONS.find((item) => item.key === overviewView) ?? OVERVIEW_VIEW_OPTIONS[0];
+  const activeTerritoriesView =
+    TERRITORIES_VIEW_OPTIONS.find((item) => item.key === territoriesView) ?? TERRITORIES_VIEW_OPTIONS[0];
+  const activeFacilitiesView =
+    FACILITIES_VIEW_OPTIONS.find((item) => item.key === facilitiesView) ?? FACILITIES_VIEW_OPTIONS[0];
 
   const epciRanking = useMemo(() => {
     return filteredEpci
@@ -639,6 +1077,146 @@ function App() {
       color: MANAGEMENT_COLORS[name] ?? "#56768c",
     }));
   }, [filteredBasins]);
+
+  const comparableScopedInstallationCount = useMemo(
+    () => countUnique(comparableScopedBasins.map((item) => item.id_installation)),
+    [comparableScopedBasins],
+  );
+
+  const inventoryCountModeLabel =
+    inventoryCountMode === "equipments" ? "équipements" : "installations";
+
+  const countedTypeBreakdown = useMemo(
+    () => buildInventoryTypeBreakdownRows(filteredBasins, inventoryCountMode),
+    [filteredBasins, inventoryCountMode],
+  );
+
+  const countedActivityBreakdown = useMemo(
+    () => buildInventoryActivityRows(filteredBasins, inventoryCountMode),
+    [filteredBasins, inventoryCountMode],
+  );
+
+  const filteredExtendedInventorySummary = useMemo(
+    () => buildExtendedInventorySummary(filteredExtendedInventory),
+    [filteredExtendedInventory],
+  );
+
+  const extendedFamilyBreakdown = useMemo(
+    () => buildExtendedInventoryFamilyBreakdownRows(filteredExtendedInventory, inventoryCountMode),
+    [filteredExtendedInventory, inventoryCountMode],
+  );
+
+  const extendedTypeBreakdown = useMemo(
+    () => buildInventoryTypeBreakdownRows(filteredExtendedInventory, inventoryCountMode),
+    [filteredExtendedInventory, inventoryCountMode],
+  );
+
+  const extendedActivityBreakdown = useMemo(
+    () => buildInventoryActivityRows(filteredExtendedInventory, inventoryCountMode),
+    [filteredExtendedInventory, inventoryCountMode],
+  );
+
+  const extendedParticularityBreakdown = useMemo(
+    () => buildExtendedInventoryParticularityRows(filteredExtendedInventory, inventoryCountMode),
+    [filteredExtendedInventory, inventoryCountMode],
+  );
+
+  const territorySurfaceRows = useMemo(() => {
+    return [...scopedEpci]
+      .filter((item) => item.bassins_total > 0 || item.surface_totale_bassins_m2 > 0)
+      .map((item) => ({
+        epci_code: item.epci_code,
+        epci_nom: item.epci_nom,
+        departement: item.departement,
+        bassins: item.bassins_total,
+        totalSurface: item.surface_totale_bassins_m2,
+        surfacePer1000Hab:
+          safeDivide(item.surface_totale_bassins_m2, item.population_2023_communes) * 1000,
+        averageSurface: safeDivide(item.surface_totale_bassins_m2, item.bassins_total),
+      }))
+      .sort((left, right) => right.surfacePer1000Hab - left.surfacePer1000Hab);
+  }, [scopedEpci]);
+
+  const specializedEquipmentCount = useMemo(
+    () => scopedBasins.filter((item) => !CORE_AQUATIC_TYPES.has(item.type_equipement)).length,
+    [scopedBasins],
+  );
+
+  const divingEquipmentCount = useMemo(
+    () => scopedBasins.filter((item) => isDivingEquipment(item)).length,
+    [scopedBasins],
+  );
+
+  const physicalStats = useMemo(() => {
+    const surfaces = filteredBasins
+      .map((item) => item.surface_bassin_m2)
+      .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+    const lengths = filteredBasins
+      .map((item) => item.longueur_m)
+      .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+    const lanes = filteredBasins
+      .map((item) => item.nb_couloirs)
+      .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+
+    return {
+      totalSurface: surfaces.reduce((total, value) => total + value, 0),
+      averageSurface: average(surfaces),
+      averageLength: average(lengths),
+      averageLanes: average(lanes),
+      surfaceCoverage: safeDivide(surfaces.length, filteredBasins.length),
+      lengthCoverage: safeDivide(lengths.length, filteredBasins.length),
+      lanesCoverage: safeDivide(lanes.length, filteredBasins.length),
+    };
+  }, [filteredBasins]);
+
+  const surfaceDistribution = useMemo(() => {
+    return SURFACE_BUCKETS.map((bucket) => ({
+      label: bucket.label,
+      value: filteredBasins.filter(
+        (item) =>
+          typeof item.surface_bassin_m2 === "number" &&
+          item.surface_bassin_m2 >= bucket.min &&
+          item.surface_bassin_m2 < bucket.max,
+      ).length,
+      kind: "count" as const,
+      seriesLabel: "Équipements",
+    }));
+  }, [filteredBasins]);
+
+  const lengthDistribution = useMemo(() => {
+    return LENGTH_BUCKETS.map((bucket) => ({
+      label: bucket.label,
+      value: filteredBasins.filter(
+        (item) =>
+          typeof item.longueur_m === "number" &&
+          item.longueur_m >= bucket.min &&
+          item.longueur_m < bucket.max,
+      ).length,
+      kind: "count" as const,
+      seriesLabel: "Équipements",
+    }));
+  }, [filteredBasins]);
+
+  const schoolScopeGap = useMemo(() => {
+    if (!currentOverview) {
+      return {
+        usageCount: 0,
+        explicitCount: 0,
+        delta: 0,
+        explicitShare: 0,
+      };
+    }
+
+    const usageCount = currentOverview.bassins_usage_scolaires;
+    const explicitCount = currentOverview.bassins_site_scolaire_explicit;
+
+    return {
+      usageCount,
+      explicitCount,
+      delta: usageCount - explicitCount,
+      explicitShare: safeDivide(explicitCount, usageCount),
+    };
+  }, [currentOverview]);
 
   const localitySignals = useMemo(
     () => buildLocalitySignals(data, scopedEpci, scopedBasins),
@@ -706,6 +1284,11 @@ function App() {
       .sort((left, right) => left.epci_nom.localeCompare(right.epci_nom, "fr"));
   }, [data, selectedDepartment]);
 
+  const comparisonEpciOptions = useMemo(
+    () => territoryEpciOptions.filter((item) => item.epci_code !== selectedEpciCode),
+    [selectedEpciCode, territoryEpciOptions],
+  );
+
   useEffect(() => {
     if (
       selectedEpciCode !== "all" &&
@@ -716,7 +1299,33 @@ function App() {
   }, [selectedEpciCode, territoryEpciOptions]);
 
   useEffect(() => {
-    if (activeTab !== "territories" || selectedEpciCode === "all" || !pendingTerritoryJumpRef.current) {
+    if (selectedEpciCode === "all" && selectedComparisonEpciCode !== "all") {
+      setSelectedComparisonEpciCode("all");
+    }
+  }, [selectedComparisonEpciCode, selectedEpciCode]);
+
+  useEffect(() => {
+    if (
+      selectedComparisonEpciCode !== "all" &&
+      !comparisonEpciOptions.some((item) => item.epci_code === selectedComparisonEpciCode)
+    ) {
+      setSelectedComparisonEpciCode("all");
+    }
+  }, [comparisonEpciOptions, selectedComparisonEpciCode]);
+
+  useEffect(() => {
+    if (localityTypeFilter !== "all" && !availableLocalityTypes.includes(localityTypeFilter)) {
+      setLocalityTypeFilter("all");
+    }
+  }, [availableLocalityTypes, localityTypeFilter]);
+
+  useEffect(() => {
+    if (
+      activeTab !== "territories" ||
+      territoriesView !== "territory" ||
+      selectedEpciCode === "all" ||
+      !pendingTerritoryJumpRef.current
+    ) {
       return;
     }
 
@@ -726,12 +1335,16 @@ function App() {
     }, 70);
 
     return () => window.clearTimeout(timeoutId);
-  }, [activeTab, selectedEpciCode]);
+  }, [activeTab, selectedEpciCode, territoriesView]);
 
   const activeEpci = territoryEpciOptions.find((item) => item.epci_code === selectedEpciCode) ?? null;
+  const comparisonEpci =
+    territoryEpciOptions.find((item) => item.epci_code === selectedComparisonEpciCode) ?? null;
 
   function openTerritoryCard(epciCode: string) {
     pendingTerritoryJumpRef.current = true;
+    setActiveTab("territories");
+    setTerritoriesView("territory");
     setSelectedEpciCode(epciCode);
 
     if (selectedEpciCode === epciCode) {
@@ -758,6 +1371,19 @@ function App() {
   const territorySubtitle = activeEpci
     ? `${formatInteger(activeEpci.communes_total)} communes · ${formatInteger(activeEpci.population_2023_communes)} habitants`
     : `Lecture agrégée du périmètre actif : ${departmentLabel}`;
+
+  const territoryPanelEyebrow =
+    territoriesView === "comparisons" ? "Comparaisons territoriales" : "Fiche territoire";
+  const territoryPanelTitle =
+    territoriesView === "comparisons" ? "Comparer des territoires" : territoryName;
+  const territoryPanelSubtitle =
+    territoriesView === "comparisons"
+      ? selectedEpciCode === "all"
+        ? "Sélectionne un EPCI principal pour ouvrir un face-à-face plus lisible."
+        : comparisonEpci
+          ? `${territoryName} face à ${comparisonEpci.epci_nom}.`
+          : "Choisis un second EPCI pour lancer la comparaison détaillée."
+      : territorySubtitle;
 
   const territoryKpis = useMemo(() => {
     if (!currentOverview) {
@@ -1050,6 +1676,171 @@ function App() {
     [departmentBenchmarkSummary, regionBenchmarkSummary, territorySummary],
   );
 
+  const comparisonTerritoryCommunes = useMemo(() => {
+    if (!data || selectedComparisonEpciCode === "all") {
+      return [];
+    }
+
+    return data.communes.filter((item) => item.epci_code === selectedComparisonEpciCode);
+  }, [data, selectedComparisonEpciCode]);
+
+  const comparisonTerritoryBasins = useMemo(() => {
+    if (selectedComparisonEpciCode === "all") {
+      return [];
+    }
+
+    return scopedBasins.filter((item) => item.epci_code === selectedComparisonEpciCode);
+  }, [scopedBasins, selectedComparisonEpciCode]);
+
+  const comparisonTerritorySummary = useMemo<TerritoryMetricsSummary | null>(() => {
+    if (!comparisonEpci) {
+      return null;
+    }
+
+    return buildTerritoryMetricsSummary({
+      bassinsPour100kHab: comparisonEpci.bassins_pour_100k_hab,
+      surface: comparisonEpci.surface_totale_bassins_m2,
+      population: comparisonEpci.population_2023_communes,
+      licences: comparisonEpci.licences_ffn_2023,
+      communesWithLicences: countCommunesWithLicences(comparisonTerritoryCommunes),
+      communesWithoutBasin: countCommunesWithLicencesSansBassin(comparisonTerritoryCommunes),
+    });
+  }, [comparisonEpci, comparisonTerritoryCommunes]);
+
+  const filteredComparableTerritoryBasins = useMemo(
+    () =>
+      territoryBasins.filter(
+        (item) =>
+          matchesComparableProfileScope(item, comparableProfileScope) &&
+          matchesComparableBasinContext(item, comparableBasinContext),
+      ),
+    [comparableBasinContext, comparableProfileScope, territoryBasins],
+  );
+
+  const filteredComparableComparisonBasins = useMemo(
+    () =>
+      comparisonTerritoryBasins.filter(
+        (item) =>
+          matchesComparableProfileScope(item, comparableProfileScope) &&
+          matchesComparableBasinContext(item, comparableBasinContext),
+      ),
+    [comparableBasinContext, comparableProfileScope, comparisonTerritoryBasins],
+  );
+
+  const filteredComparableProfileRows = useMemo(
+    () => buildComparableProfileCoverageRows(filteredComparableTerritoryBasins),
+    [filteredComparableTerritoryBasins],
+  );
+
+  const filteredComparableProfileComparisonRows = useMemo(
+    () =>
+      buildComparableProfileComparisonRows(
+        filteredComparableTerritoryBasins,
+        filteredComparableComparisonBasins,
+      ),
+    [filteredComparableComparisonBasins, filteredComparableTerritoryBasins],
+  );
+
+  const filteredComparableTerritorySummary = useMemo(
+    () => buildComparableProfileSummary(filteredComparableTerritoryBasins),
+    [filteredComparableTerritoryBasins],
+  );
+
+  const filteredComparableComparisonSummary = useMemo(
+    () => buildComparableProfileSummary(filteredComparableComparisonBasins),
+    [filteredComparableComparisonBasins],
+  );
+
+  const filteredComparableTerritoryListRows = useMemo(
+    () => buildComparableBasinListRows(filteredComparableTerritoryBasins),
+    [filteredComparableTerritoryBasins],
+  );
+
+  const filteredComparableComparisonListRows = useMemo(
+    () => buildComparableBasinListRows(filteredComparableComparisonBasins),
+    [filteredComparableComparisonBasins],
+  );
+
+  const countedTerritoryActivityRows = useMemo(
+    () => buildInventoryActivityRows(territoryBasins, inventoryCountMode),
+    [inventoryCountMode, territoryBasins],
+  );
+
+  const countedTerritoryActivityComparisonRows = useMemo(
+    () =>
+      buildComparableInventoryActivityRows(
+        territoryBasins,
+        comparisonTerritoryBasins,
+        inventoryCountMode,
+      ),
+    [comparisonTerritoryBasins, inventoryCountMode, territoryBasins],
+  );
+
+  const territoryTypologyRows = useMemo(
+    () => buildTerritoryTypologyRows(territoryCommunes, territoryBasins),
+    [territoryBasins, territoryCommunes],
+  );
+
+  const territoryDirectComparisonRows = useMemo(() => {
+    if (!activeEpci || !comparisonEpci || !comparisonTerritorySummary) {
+      return [];
+    }
+
+    return [
+      {
+        label: "Population",
+        kind: "count" as const,
+        primary: activeEpci.population_2023_communes,
+        comparison: comparisonEpci.population_2023_communes,
+      },
+      {
+        label: "Licences FFN 2023",
+        kind: "count" as const,
+        primary: activeEpci.licences_ffn_2023,
+        comparison: comparisonEpci.licences_ffn_2023,
+      },
+      {
+        label: "Bassins",
+        kind: "count" as const,
+        primary: activeEpci.bassins_total,
+        comparison: comparisonEpci.bassins_total,
+      },
+      {
+        label: "Surface pour 1 000 hab.",
+        kind: "ratio" as const,
+        primary: territorySummary.surfaceM2Pour1000Hab,
+        comparison: comparisonTerritorySummary.surfaceM2Pour1000Hab,
+      },
+      {
+        label: "Licences FFN pour 1 000 hab.",
+        kind: "ratio" as const,
+        primary: activeEpci.licences_ffn_pour_1000hab,
+        comparison: comparisonEpci.licences_ffn_pour_1000hab,
+      },
+      {
+        label: "Bassins proches QPV / 100k hab. QPV",
+        kind: "ratio" as const,
+        primary: safeDivide(activeEpci.bassins_qpv_200m, activeEpci.pop_qpv) * 100000,
+        comparison: safeDivide(comparisonEpci.bassins_qpv_200m, comparisonEpci.pop_qpv) * 100000,
+      },
+      {
+        label: "Part de population QPV",
+        kind: "percent" as const,
+        primary: activeEpci.part_population_qpv,
+        comparison: comparisonEpci.part_population_qpv,
+      },
+      {
+        label: "Communes licenciées sans bassin",
+        kind: "percent" as const,
+        primary: territorySummary.communesSansBassinParmiLicenciees,
+        comparison: comparisonTerritorySummary.communesSansBassinParmiLicenciees,
+      },
+    ].map((item) => ({
+      ...item,
+      delta: item.primary - item.comparison,
+    }));
+  }, [activeEpci, comparisonEpci, comparisonTerritorySummary, territorySummary]);
+
   const investigationRows = useMemo<InvestigationProfileRow[]>(() => {
     if (filteredEpci.length === 0) {
       return [];
@@ -1111,11 +1902,11 @@ function App() {
           qpvVolumeRankMap.get(item.epci_code) ?? 0,
           qpvRankMap.get(item.epci_code) ?? 0,
         ]);
-        const priorityScore =
-          (offerGapIndex * INVESTIGATION_PRIORITY_WEIGHTS.offer_gap +
-            pressureIndex * INVESTIGATION_PRIORITY_WEIGHTS.pressure +
-            impactIndex * INVESTIGATION_PRIORITY_WEIGHTS.impact) *
-          100;
+        const priorityScore = calculatePriorityScore({
+          offerGapIndex,
+          pressureIndex,
+          impactIndex,
+        });
         const profile = classifyInvestigationProfile(offerGapIndex, pressureIndex, impactIndex);
         const hypothesis = buildInvestigationHypothesis({
           profile,
@@ -1187,6 +1978,22 @@ function App() {
       }),
     [investigationLens, investigationRows],
   );
+
+  const investigationPageCount = Math.max(
+    1,
+    Math.ceil(rankedInvestigationRows.length / INVESTIGATION_PAGE_SIZE),
+  );
+  const currentInvestigationPage = Math.min(investigationPage, investigationPageCount);
+  const pagedInvestigationRows = useMemo(() => {
+    const startIndex = (currentInvestigationPage - 1) * INVESTIGATION_PAGE_SIZE;
+    return rankedInvestigationRows.slice(startIndex, startIndex + INVESTIGATION_PAGE_SIZE);
+  }, [currentInvestigationPage, rankedInvestigationRows]);
+  const investigationRangeStart =
+    rankedInvestigationRows.length === 0 ? 0 : (currentInvestigationPage - 1) * INVESTIGATION_PAGE_SIZE + 1;
+  const investigationRangeEnd =
+    rankedInvestigationRows.length === 0
+      ? 0
+      : Math.min(rankedInvestigationRows.length, currentInvestigationPage * INVESTIGATION_PAGE_SIZE);
 
   const investigationRankMaps = useMemo<InvestigationRankLookup>(
     () => ({
@@ -1288,8 +2095,17 @@ function App() {
     if (activeTab === "territories") {
       pills.push(`Lecture : ${activeInvestigationLens.label}`);
       pills.push(`Indicateur : ${activeMetricOption.label}`);
+      if (inventoryCountMode !== "equipments") {
+        pills.push("Comptage : installations");
+      }
       if (selectedEpciCode !== "all") {
         pills.push(`Territoire : ${territoryName}`);
+      }
+      if (selectedComparisonEpciCode !== "all") {
+        const comparisonLabel =
+          territoryEpciOptions.find((item) => item.epci_code === selectedComparisonEpciCode)?.epci_nom ??
+          "Comparatif";
+        pills.push(`Comparaison : ${comparisonLabel}`);
       }
       if (epciSearch) {
         pills.push(`Recherche EPCI : ${epciSearch}`);
@@ -1297,6 +2113,9 @@ function App() {
     }
 
     if (activeTab === "facilities") {
+      if (inventoryCountMode !== "equipments") {
+        pills.push("Comptage : installations");
+      }
       if (managementFilter !== "all") {
         pills.push(`Gestion : ${managementFilter}`);
       }
@@ -1306,8 +2125,11 @@ function App() {
       if (basinUsageFilter === "qpv") {
         pills.push("Usage : QPV ou 200 m");
       }
+      if (localityTypeFilter !== "all") {
+        pills.push(`Typologie : ${localityTypeFilter}`);
+      }
       if (basinSearch) {
-        pills.push(`Recherche bassin : ${basinSearch}`);
+        pills.push(`Recherche équipement : ${basinSearch}`);
       }
     }
 
@@ -1328,15 +2150,20 @@ function App() {
     basinUsageFilter,
     departmentLabel,
     epciSearch,
+    inventoryCountMode,
+    localityTypeFilter,
     managementFilter,
     rawSearch,
     selectedDepartment,
+    selectedComparisonEpciCode,
     selectedEpciCode,
+    territoryEpciOptions,
     territoryName,
   ]);
 
   const activeTabOption = TAB_OPTIONS.find((item) => item.key === activeTab) ?? TAB_OPTIONS[0];
   const epciChartHeight = Math.max(420, epciRanking.length * 40);
+  const qpvChartHeight = Math.max(320, qpvFragilityChartRows.length * 42);
 
   if (error) {
     return (
@@ -1448,6 +2275,33 @@ function App() {
 
       {activeTab === "overview" ? (
         <>
+          <section className="panel workspace-nav-panel">
+            <div className="panel-heading">
+              <div>
+                <span className="eyebrow">Organisation</span>
+                <h2>{"Choisir une lecture synth\u00e8se"}</h2>
+              </div>
+              <p>
+                {"La synth\u00e8se est maintenant r\u00e9partie entre un panorama global et une lecture sociale d\u00e9di\u00e9e QPV."}
+              </p>
+            </div>
+            <div className="chip-row workspace-nav-row">
+              {OVERVIEW_VIEW_OPTIONS.map((option) => (
+                <button
+                  key={option.key}
+                  type="button"
+                  className={overviewView === option.key ? "chip active" : "chip"}
+                  onClick={() => setOverviewView(option.key)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <p className="chart-note">{activeOverviewView.description}</p>
+          </section>
+
+          {overviewView === "panorama" ? (
+            <>
           <section className="kpi-grid">
             <StatCard
               label="Bassins recensés"
@@ -1565,12 +2419,202 @@ function App() {
               </div>
             </article>
           </section>
+
+            </>
+          ) : null}
+
+          {overviewView === "social" ? (
+            <>
+          <section className="panel">
+            <div className="panel-heading">
+              <div>
+                <span className="eyebrow">Enjeux sociaux</span>
+                <h2>Lecture QPV du périmètre actif</h2>
+              </div>
+              <p>
+                Vue dédiée sur la population QPV, la proximité des bassins et les EPCI où la couverture
+                sociale paraît la plus fragile.
+              </p>
+            </div>
+
+            <div className="investigation-summary">
+              <article className="summary-chip">
+                <span className="summary-chip-label">Population QPV</span>
+                <strong>{formatInteger(qpvScopeSummary.qpvPopulation)}</strong>
+                <small>{formatPercent(qpvScopeSummary.qpvPopulationShare)} de la population du périmètre.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">QPV recensés</span>
+                <strong>{formatInteger(qpvScopeSummary.qpvCount)}</strong>
+                <small>Somme des QPV portés par les EPCI du périmètre actif.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Bassins en QPV ou à 200 m</span>
+                <strong>{formatInteger(qpvScopeSummary.bassinsQpv200m)}</strong>
+                <small>{formatInteger(qpvScopeSummary.bassinsQpv)} sont directement situés en QPV.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Bassins proches par QPV</span>
+                <strong>
+                  {qpvScopeSummary.qpvCount > 0
+                    ? formatNumber(qpvScopeSummary.bassinsParQpv, 2)
+                    : "n.c."}
+                </strong>
+                <small>Rapport entre bassins dans ou à 200 m et nombre de QPV recensés.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Bassins proches / 100k hab. QPV</span>
+                <strong>
+                  {qpvScopeSummary.qpvPopulation > 0
+                    ? formatNumber(qpvScopeSummary.coveragePer100kQpv, 2)
+                    : "n.c."}
+                </strong>
+                <small>Lecture de proximité pour les habitants des quartiers prioritaires.</small>
+              </article>
+            </div>
+          </section>
+
+          <section className="content-grid territory-comparison-grid">
+            <article className="panel chart-panel">
+              <div className="panel-heading">
+                <div>
+                  <span className="eyebrow">Fragilité sociale</span>
+                  <h2>EPCI QPV à surveiller</h2>
+                </div>
+                <p>
+                  Le score ci-dessous monte lorsque le poids QPV est élevé et que la couverture en bassins
+                  proches recule.
+                </p>
+              </div>
+
+              {qpvFragilityChartRows.length > 0 ? (
+                <div className="chart-wrap ranking-chart" style={{ height: `${qpvChartHeight}px` }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={qpvFragilityChartRows}
+                      layout="vertical"
+                      margin={{ top: 0, right: 18, bottom: 0, left: 0 }}
+                    >
+                      <CartesianGrid strokeDasharray="4 4" horizontal={false} stroke="#d2ddd6" />
+                      <XAxis type="number" domain={[0, 100]} tickLine={false} axisLine={false} />
+                      <YAxis
+                        dataKey="epci_nom"
+                        type="category"
+                        tickLine={false}
+                        axisLine={false}
+                        width={290}
+                        tick={{ fontSize: 12 }}
+                      />
+                      <Tooltip content={<ChartTooltip />} />
+                      <Bar dataKey="value" name="Fragilité sociale QPV" radius={[0, 10, 10, 0]}>
+                        {qpvFragilityChartRows.map((item) => (
+                          <Cell
+                            key={item.epci_code}
+                            fill={Number(item.value) >= 60 ? "#ff8f5c" : "#1f4e70"}
+                          />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <p className="subtle-empty">Aucun EPCI avec enjeu QPV n'est remonté sur le périmètre actif.</p>
+              )}
+            </article>
+
+            <article className="panel territory-card">
+              <div className="panel-heading">
+                <div>
+                  <span className="eyebrow">Détail</span>
+                  <h2>Couverture QPV par EPCI</h2>
+                </div>
+                <p>
+                  Les premières lignes combinent poids social et faiblesse de couverture QPV dans le
+                  périmètre actif.
+                </p>
+              </div>
+
+              {qpvFragilityRows.length > 0 ? (
+                <div className="table-scroll">
+                  <table className="raw-table">
+                    <thead>
+                      <tr>
+                        <th>EPCI</th>
+                        <th>Pop. QPV</th>
+                        <th>Part QPV</th>
+                        <th>Bassins à 200 m / QPV</th>
+                        <th>Bassins à 200 m / 100k hab. QPV</th>
+                        <th>Fiche</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {qpvFragilityRows.slice(0, 8).map((item) => (
+                        <tr key={item.epci_code}>
+                          <td>
+                            <span className="cell-text" title={item.epci_nom}>
+                              {item.epci_nom}
+                            </span>
+                          </td>
+                          <td>{formatInteger(item.qpvPopulation)}</td>
+                          <td>{formatPercent(item.qpvShare)}</td>
+                          <td>{item.qpvCount > 0 ? formatNumber(item.bassinsParQpv, 2) : "n.c."}</td>
+                          <td>
+                            {item.qpvPopulation > 0 ? formatNumber(item.coveragePer100kQpv, 2) : "n.c."}
+                          </td>
+                          <td>
+                            <button
+                              type="button"
+                              className="text-button"
+                              onClick={() => openTerritoryCard(item.epci_code)}
+                            >
+                              Ouvrir
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="subtle-empty">Aucun EPCI avec données QPV n'est disponible sur le périmètre actif.</p>
+              )}
+            </article>
+          </section>
+            </>
+          ) : null}
         </>
       ) : null}
 
       {activeTab === "territories" ? (
         <>
-          <section className="panel investigation-panel">
+          <section className="panel territory-nav-panel">
+            <div className="panel-heading">
+              <div>
+                <span className="eyebrow">Organisation</span>
+                <h2>Choisir une vue de travail</h2>
+              </div>
+              <p>
+                L'onglet est maintenant réparti en sous-vues pour éviter une page trop longue à parcourir.
+              </p>
+            </div>
+            <div className="chip-row territory-nav-row">
+              {TERRITORIES_VIEW_OPTIONS.map((option) => (
+                <button
+                  key={option.key}
+                  type="button"
+                  className={territoriesView === option.key ? "chip active" : "chip"}
+                  onClick={() => setTerritoriesView(option.key)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <p className="chart-note">{activeTerritoriesView.description}</p>
+          </section>
+
+          {territoriesView === "investigation" ? (
+            <>
+              <section className="panel investigation-panel">
             <div className="panel-heading">
               <div>
                 <span className="eyebrow">Lecture d'investigation</span>
@@ -1882,7 +2926,7 @@ function App() {
             </article>
           </section>
 
-          <section className="panel quadrant-panel">
+              <section className="panel quadrant-panel">
             <div className="panel-heading">
               <div>
                 <span className="eyebrow">Positionnement</span>
@@ -1956,7 +3000,7 @@ function App() {
             )}
           </section>
 
-          <section className="panel investigation-table-panel">
+              <section className="panel investigation-table-panel">
             <div className="panel-heading">
               <div>
                 <span className="eyebrow">Exhaustif</span>
@@ -1964,137 +3008,217 @@ function App() {
               </div>
               <p>
                 {formatInteger(rankedInvestigationRows.length)} EPCI listés sur le périmètre actif.
-                La lecture active trie la table, mais les trois sous-scores restent visibles.
+                La lecture active trie la table, avec pagination de 10 lignes pour faciliter le parcours.
               </p>
             </div>
 
             {rankedInvestigationRows.length > 0 ? (
-              <div className="table-scroll">
-                <div className="investigation-table">
-                  <div className="investigation-head-row">
-                    <span>Rang</span>
-                    <span>Territoire</span>
-                    <span>Lecture du score</span>
-                    <span>Indicateurs actifs et signaux</span>
-                    <span>Hypothèse d&apos;investigation</span>
-                    <span>Fiche</span>
-                  </div>
-                  {rankedInvestigationRows.map((item, index) => (
-                    <div
-                      key={item.epci_code}
-                      className={`investigation-row ${selectedEpciCode === item.epci_code ? "selected" : ""}`}
-                    >
-                      <div className="investigation-rank">
-                        <strong>#{index + 1}</strong>
-                        <span
-                          className={`score-pill ${getPriorityToneClass(
-                            getInvestigationScoreByLens(item, investigationLens),
-                          )}`}
-                        >
-                          {formatScore(getInvestigationScoreByLens(item, investigationLens))}
-                        </span>
-                        <small>Priorité {formatScore(item.priorityScore)}</small>
-                      </div>
-                      <div className="investigation-territory">
-                        <strong>{item.epci_nom}</strong>
-                        <small>
-                          {shortDepartment(item.departement)} · {formatInteger(item.population)} hab.
-                          · {formatInteger(item.bassins)} bassins · {formatInteger(item.licences)}{" "}
-                          licences
-                        </small>
-                      </div>
-                      <div className="investigation-score-column">
-                        <InvestigationScoreBreakdown
-                          item={item}
-                          rankMaps={investigationRankMaps}
-                          total={investigationRows.length}
-                          compact
-                        />
-                      </div>
-                      <div className="investigation-signals investigation-signals-column">
-                        <span>
-                          {activeMetricOption.label}{" "}
-                          {formatOptionalMetric(item.selectedMetricValue, item.selectedMetricKind)}
-                        </span>
-                        <span>Licences / bassin {formatNumber(item.licencesFfnParBassin, 1)}</span>
-                        <span>Surface / 1 000 hab. {formatNumber(item.surfaceM2Pour1000Hab, 2)}</span>
-                        <span>Licences / 100 m2 {formatNumber(item.licencesFfnPour100M2, 2)}</span>
-                        <span>
-                          Communes sans bassin {formatInteger(item.communesSansBassinVolume)} ·{" "}
-                          {formatPercent(item.communesSansBassinShare)}
-                        </span>
-                      </div>
-                      <div className="investigation-profile">
-                        <span className={`profile-pill ${getProfileToneClass(item.profile)}`}>
-                          {item.profile}
-                        </span>
-                        <small>{item.hypothesis}</small>
-                        <div className="reason-list">
-                          {item.priorityDrivers.slice(0, 3).map((reason) => (
-                            <span key={reason} className="reason-item">
-                              {reason}
-                            </span>
-                          ))}
+              <>
+                <div className="table-scroll">
+                  <div className="investigation-table">
+                    <div className="investigation-head-row">
+                      <span>Rang</span>
+                      <span>EPCI</span>
+                      <span>Lecture du score</span>
+                      <span>Indicateurs actifs et signaux</span>
+                      <span>Hypothèse d&apos;investigation</span>
+                    </div>
+                    {pagedInvestigationRows.map((item, index) => (
+                      <div
+                        key={item.epci_code}
+                        className={`investigation-row ${selectedEpciCode === item.epci_code ? "selected" : ""}`}
+                      >
+                        <div className="investigation-rank">
+                          <strong>#{investigationRangeStart + index}</strong>
+                          <span
+                            className={`score-pill ${getPriorityToneClass(
+                              getInvestigationScoreByLens(item, investigationLens),
+                            )}`}
+                          >
+                            {formatScore(getInvestigationScoreByLens(item, investigationLens))}
+                          </span>
+                          <small>Priorité {formatScore(item.priorityScore)}</small>
+                        </div>
+                        <div className="investigation-territory">
+                          <strong>{item.epci_nom}</strong>
+                          <small className="investigation-territory-meta">
+                            {shortDepartment(item.departement)} · {formatInteger(item.population)} hab.
+                            · {formatInteger(item.bassins)} b. · {formatInteger(item.licences)} lic.
+                          </small>
+                          <button
+                            type="button"
+                            className="text-button"
+                            onClick={() => openTerritoryCard(item.epci_code)}
+                          >
+                            Ouvrir la fiche
+                          </button>
+                        </div>
+                        <div className="investigation-score-column">
+                          <InvestigationScoreBreakdown
+                            item={item}
+                            rankMaps={investigationRankMaps}
+                            total={investigationRows.length}
+                            compact
+                          />
+                        </div>
+                        <div className="investigation-signals investigation-signals-column">
+                          <span>
+                            {activeMetricOption.label}{" "}
+                            {formatOptionalMetric(item.selectedMetricValue, item.selectedMetricKind)}
+                          </span>
+                          <span>Licences / bassin {formatNumber(item.licencesFfnParBassin, 1)}</span>
+                          <span>Surface / 1 000 hab. {formatNumber(item.surfaceM2Pour1000Hab, 2)}</span>
+                          <span>Licences / 100 m2 {formatNumber(item.licencesFfnPour100M2, 2)}</span>
+                          <span>
+                            Communes sans bassin {formatInteger(item.communesSansBassinVolume)} ·{" "}
+                            {formatPercent(item.communesSansBassinShare)}
+                          </span>
+                        </div>
+                        <div className="investigation-profile">
+                          <span className={`profile-pill ${getProfileToneClass(item.profile)}`}>
+                            {item.profile}
+                          </span>
+                          <small>{item.hypothesis}</small>
+                          <div className="reason-list">
+                            {item.priorityDrivers.slice(0, 3).map((reason) => (
+                              <span key={reason} className="reason-item">
+                                {reason}
+                              </span>
+                            ))}
+                          </div>
                         </div>
                       </div>
-                      <div className="investigation-action">
-                        <button
-                          type="button"
-                          className="text-button"
-                          onClick={() => openTerritoryCard(item.epci_code)}
-                        >
-                          Ouvrir
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
-              </div>
+                <div className="pager">
+                  <span>
+                    EPCI {formatInteger(investigationRangeStart)} à {formatInteger(investigationRangeEnd)} sur{" "}
+                    {formatInteger(rankedInvestigationRows.length)}
+                  </span>
+                  <div className="pager-actions">
+                    <button
+                      type="button"
+                      className="pager-button"
+                      onClick={() => setInvestigationPage((page) => Math.max(1, page - 1))}
+                      disabled={currentInvestigationPage === 1}
+                    >
+                      Précédent
+                    </button>
+                    <strong>
+                      Page {formatInteger(currentInvestigationPage)} / {formatInteger(investigationPageCount)}
+                    </strong>
+                    <button
+                      type="button"
+                      className="pager-button"
+                      onClick={() => setInvestigationPage((page) => Math.min(investigationPageCount, page + 1))}
+                      disabled={currentInvestigationPage === investigationPageCount}
+                    >
+                      Suivant
+                    </button>
+                  </div>
+                </div>
+              </>
             ) : (
               <p className="subtle-empty">Aucun EPCI n'est disponible dans le périmètre actif.</p>
             )}
           </section>
 
-          <section ref={territoryPanelRef} className="panel territory-panel">
+            </>
+          ) : null}
+
+          {territoriesView !== "investigation" ? (
+            <section ref={territoryPanelRef} className="panel territory-panel">
             <div className="territory-header">
               <div>
-                <span className="eyebrow">Fiche territoire</span>
-                <h2>{territoryName}</h2>
-                <p>{territorySubtitle}</p>
+                <span className="eyebrow">{territoryPanelEyebrow}</span>
+                <h2>{territoryPanelTitle}</h2>
+                <p>{territoryPanelSubtitle}</p>
               </div>
 
-              <div className="compact-control territory-selector">
-                <label htmlFor="territory-select">Territoire</label>
-                <select
-                  id="territory-select"
-                  value={selectedEpciCode}
-                  onChange={(event) => setSelectedEpciCode(event.target.value)}
-                >
-                  <option value="all">
-                    {selectedDepartment === "all" ? "Vue régionale" : `Vue ${departmentLabel}`}
-                  </option>
-                  {territoryEpciOptions.map((item) => (
-                    <option key={item.epci_code} value={item.epci_code}>
-                      {item.epci_nom}
+              <div className="panel-heading-actions">
+                <div className="compact-control territory-selector">
+                  <label htmlFor="territory-select">Territoire</label>
+                  <select
+                    id="territory-select"
+                    value={selectedEpciCode}
+                    onChange={(event) => setSelectedEpciCode(event.target.value)}
+                  >
+                    <option value="all">
+                      {selectedDepartment === "all" ? "Vue régionale" : `Vue ${departmentLabel}`}
                     </option>
-                  ))}
-                </select>
+                    {territoryEpciOptions.map((item) => (
+                      <option key={item.epci_code} value={item.epci_code}>
+                        {item.epci_nom}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {territoriesView === "comparisons" ? (
+                  <div className="compact-control territory-selector">
+                    <label htmlFor="territory-compare-select">Comparer avec</label>
+                    <select
+                      id="territory-compare-select"
+                      value={selectedComparisonEpciCode}
+                      onChange={(event) => setSelectedComparisonEpciCode(event.target.value)}
+                      disabled={selectedEpciCode === "all"}
+                    >
+                      <option value="all">
+                        {selectedEpciCode === "all" ? "Sélectionne d'abord un EPCI" : "Aucun comparatif"}
+                      </option>
+                      {comparisonEpciOptions.map((item) => (
+                        <option key={item.epci_code} value={item.epci_code}>
+                          {item.epci_nom}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : null}
+
+                {territoriesView === "comparisons" ? (
+                  <div className="compact-control territory-selector">
+                    <label htmlFor="territory-count-mode">Compter en</label>
+                    <select
+                      id="territory-count-mode"
+                      value={inventoryCountMode}
+                      onChange={(event) => setInventoryCountMode(event.target.value as InventoryCountMode)}
+                    >
+                      <option value="equipments">Équipements</option>
+                      <option value="installations">Installations</option>
+                    </select>
+                  </div>
+                ) : null}
               </div>
             </div>
 
-            <div className="territory-kpi-grid">
-              {territoryKpis.map((item) => (
-                <StatCard
-                  key={item.label}
-                  label={item.label}
-                  value={item.value}
-                  detail={item.detail}
-                  accent={item.accent}
-                />
-              ))}
-            </div>
+            {territoriesView === "territory" ? (
+              <div className="territory-kpi-grid">
+                {territoryKpis.map((item) => (
+                  <StatCard
+                    key={item.label}
+                    label={item.label}
+                    value={item.value}
+                    detail={item.detail}
+                    accent={item.accent}
+                  />
+                ))}
+              </div>
+            ) : (
+              <p className="chart-note">
+                Cette vue regroupe uniquement les comparaisons directes, les bassins équivalents et les
+                lectures de structure du parc.
+              </p>
+            )}
+
+            {territoriesView === "comparisons" && selectedEpciCode === "all" ? (
+              <p className="subtle-empty">
+                Sélectionne un EPCI principal pour afficher les comparaisons détaillées.
+              </p>
+            ) : null}
 
             <div className="territory-detail-grid">
+              {territoriesView === "territory" ? (
               <div className="territory-card">
                 <h3>Repères territoriaux</h3>
                 <div className="fact-list">
@@ -2109,7 +3233,9 @@ function App() {
                   ))}
                 </div>
               </div>
+              ) : null}
 
+              {territoriesView === "territory" ? (
               <div className="territory-card">
                 <h3>Comparatifs territoire / département / région</h3>
                 <div className="benchmark-table">
@@ -2131,7 +3257,387 @@ function App() {
                   ))}
                 </div>
               </div>
+              ) : null}
 
+              {territoriesView === "comparisons" && selectedEpciCode !== "all" ? (
+              <div className="territory-card territory-card-wide">
+                <h3>Comparaison directe entre deux EPCI</h3>
+                {activeEpci && comparisonEpci && territoryDirectComparisonRows.length > 0 ? (
+                  <div className="table-scroll">
+                    <table className="raw-table">
+                      <thead>
+                        <tr>
+                          <th>Indicateur</th>
+                          <th>{activeEpci.epci_nom}</th>
+                          <th>{comparisonEpci.epci_nom}</th>
+                          <th>Écart</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {territoryDirectComparisonRows.map((item) => (
+                          <tr key={item.label}>
+                            <td>{item.label}</td>
+                            <td>{formatMetricByKind(item.primary, item.kind)}</td>
+                            <td>{formatMetricByKind(item.comparison, item.kind)}</td>
+                            <td>{`${getDeltaArrow(item.delta)} ${formatSignedMetricByKind(item.delta, item.kind)}`}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="subtle-empty">
+                    Sélectionne un EPCI principal puis un second EPCI pour afficher un face-à-face direct
+                    sur les indicateurs les plus structurants.
+                  </p>
+                )}
+              </div>
+              ) : null}
+
+              {territoriesView === "comparisons" && selectedEpciCode !== "all" ? (
+              <div className="territory-card territory-card-wide">
+                <div className="territory-card-header">
+                  <div>
+                    <h3>Comparer des bassins équivalents</h3>
+                    <p className="subtle-empty">
+                      Profils construits à partir du type d'équipement, de la longueur, de la surface, des
+                      couloirs quand ils existent, et de la profondeur pour les fosses.
+                    </p>
+                  </div>
+                  <div className="territory-comparable-controls">
+                    <div className="compact-control territory-comparable-select">
+                      <label htmlFor="territory-comparable-scope">Famille comparable</label>
+                      <select
+                        id="territory-comparable-scope"
+                        value={comparableProfileScope}
+                        onChange={(event) => setComparableProfileScope(event.target.value as ComparableProfileScope)}
+                      >
+                        {COMPARABLE_PROFILE_SCOPE_OPTIONS.map((option) => (
+                          <option key={option.key} value={option.key}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="compact-control territory-comparable-select">
+                      <label htmlFor="territory-comparable-context">Contexte</label>
+                      <select
+                        id="territory-comparable-context"
+                        value={comparableBasinContext}
+                        onChange={(event) => setComparableBasinContext(event.target.value as ComparableBasinContext)}
+                      >
+                        {COMPARABLE_BASIN_CONTEXT_OPTIONS.map((option) => (
+                          <option key={option.key} value={option.key}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="chip-row compact-chip-row">
+                  {COMPARABLE_PROFILE_SCOPE_OPTIONS.map((option) => (
+                    <button
+                      key={option.key}
+                      type="button"
+                      className={comparableProfileScope === option.key ? "chip active" : "chip"}
+                      onClick={() => setComparableProfileScope(option.key)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="chip-row compact-chip-row">
+                  {COMPARABLE_BASIN_CONTEXT_OPTIONS.map((option) => (
+                    <button
+                      key={option.key}
+                      type="button"
+                      className={comparableBasinContext === option.key ? "chip active" : "chip"}
+                      onClick={() => setComparableBasinContext(option.key)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+
+                <p className="chart-note">
+                  {activeComparableProfileScope.description} {activeComparableBasinContext.description}
+                </p>
+
+                {filteredComparableTerritoryBasins.length > 0 ? (
+                  <>
+                    <div className="investigation-summary">
+                      <article className="summary-chip">
+                        <span className="summary-chip-label">{activeEpci?.epci_nom ?? territoryName}</span>
+                          <strong>{formatInteger(filteredComparableTerritorySummary.equipmentCount)}</strong>
+                          <small>
+                            {formatInteger(filteredComparableTerritorySummary.installationCount)} installations ·{" "}
+                            {filteredComparableTerritorySummary.averageLength > 0
+                              ? `${formatOptionalMeasure(filteredComparableTerritorySummary.averageLength, "m", 1)} de longueur moyenne`
+                              : "longueur moyenne n.c."}
+                          </small>
+                        </article>
+                      {comparisonEpci ? (
+                        <article className="summary-chip">
+                          <span className="summary-chip-label">{comparisonEpci.epci_nom}</span>
+                          <strong>{formatInteger(filteredComparableComparisonSummary.equipmentCount)}</strong>
+                          <small>
+                            {formatInteger(filteredComparableComparisonSummary.installationCount)} installations ·{" "}
+                            {filteredComparableComparisonSummary.averageLength > 0
+                              ? `${formatOptionalMeasure(filteredComparableComparisonSummary.averageLength, "m", 1)} de longueur moyenne`
+                              : "longueur moyenne n.c."}
+                          </small>
+                        </article>
+                      ) : null}
+                      <article className="summary-chip">
+                        <span className="summary-chip-label">Surface moyenne</span>
+                        <strong>{formatOptionalMeasure(filteredComparableTerritorySummary.averageSurface, "m²", 0)}</strong>
+                        <small>
+                          {comparisonEpci
+                            ? filteredComparableComparisonSummary.averageSurface > 0
+                              ? `${formatOptionalMeasure(filteredComparableComparisonSummary.averageSurface, "m²", 0)} pour ${comparisonEpci.epci_nom}`
+                              : `surface moyenne n.c. pour ${comparisonEpci.epci_nom}`
+                            : "Lecture à la maille équipement pour voir les bassins réellement comparés."}
+                        </small>
+                      </article>
+                      <article className="summary-chip">
+                        <span className="summary-chip-label">Écart équipements</span>
+                        <strong>
+                          {comparisonEpci
+                            ? formatSignedInteger(
+                                filteredComparableTerritorySummary.equipmentCount -
+                                  filteredComparableComparisonSummary.equipmentCount,
+                              )
+                            : formatInteger(filteredComparableTerritorySummary.equipmentCount)}
+                        </strong>
+                        <small>
+                          {comparisonEpci
+                            ? "Différence brute entre les bassins comparables sélectionnés."
+                            : filteredComparableTerritorySummary.averageMaxDepth > 0
+                              ? `${formatOptionalMeasure(filteredComparableTerritorySummary.averageMaxDepth, "m", 1)} de profondeur max moyenne quand elle est renseignée.`
+                              : "Profondeur maximale moyenne non renseignée sur cette sélection."}
+                        </small>
+                      </article>
+                    </div>
+
+                    {activeEpci && comparisonEpci && filteredComparableProfileComparisonRows.length > 0 ? (
+                      <div className="table-scroll">
+                        <table className="raw-table">
+                          <thead>
+                            <tr>
+                              <th>Profil détaillé</th>
+                              <th>{activeEpci.epci_nom} équipements</th>
+                              <th>{activeEpci.epci_nom} installations</th>
+                              <th>{comparisonEpci.epci_nom} équipements</th>
+                              <th>{comparisonEpci.epci_nom} installations</th>
+                              <th>Écart équipements</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {filteredComparableProfileComparisonRows.map((item) => (
+                              <tr key={item.label}>
+                                <td>{item.label}</td>
+                                <td>{`${formatInteger(item.primaryEquipmentCount)} (${formatPercent(item.primaryEquipmentShare)})`}</td>
+                                <td>{`${formatInteger(item.primaryInstallationCount)} (${formatPercent(item.primaryInstallationShare)})`}</td>
+                                <td>{`${formatInteger(item.comparisonEquipmentCount)} (${formatPercent(item.comparisonEquipmentShare)})`}</td>
+                                <td>{`${formatInteger(item.comparisonInstallationCount)} (${formatPercent(item.comparisonInstallationShare)})`}</td>
+                                <td>{`${getDeltaArrow(item.deltaEquipmentCount)} ${formatSignedInteger(item.deltaEquipmentCount)}`}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : filteredComparableProfileRows.length > 0 ? (
+                      <div className="table-scroll">
+                        <table className="raw-table">
+                          <thead>
+                            <tr>
+                              <th>Profil détaillé</th>
+                              <th>Équipements</th>
+                              <th>Installations</th>
+                              <th>Part équipements</th>
+                              <th>Part installations</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {filteredComparableProfileRows.map((item) => (
+                              <tr key={item.label}>
+                                <td>{item.label}</td>
+                                <td>{formatInteger(item.equipmentCount)}</td>
+                                <td>{formatInteger(item.installationCount)}</td>
+                                <td>{formatPercent(item.equipmentShare)}</td>
+                                <td>{formatPercent(item.installationShare)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : null}
+
+                    <div className="territory-comparable-list-grid">
+                      <div className="territory-comparable-list">
+                        <h4>{activeEpci?.epci_nom ?? territoryName}</h4>
+                        <p className="subtle-empty">
+                          Liste détaillée des équipements correspondant au filtre sélectionné.
+                        </p>
+                        <div className="table-scroll comparable-list-scroll">
+                          <table className="raw-table">
+                            <thead>
+                              <tr>
+                                <th>Équipement</th>
+                                <th>Profil</th>
+                                <th>Commune</th>
+                                <th>Caractéristiques</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {filteredComparableTerritoryListRows.map((item) => (
+                                <tr key={item.id}>
+                                  <td>
+                                    <strong>{item.equipement}</strong>
+                                    <div>{item.installation}</div>
+                                  </td>
+                                  <td>{item.profile}</td>
+                                  <td>{item.commune}</td>
+                                  <td>{item.metricsLabel}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+
+                      {comparisonEpci ? (
+                        <div className="territory-comparable-list">
+                          <h4>{comparisonEpci.epci_nom}</h4>
+                          <p className="subtle-empty">
+                            Lecture symétrique pour vérifier que la comparaison porte sur les mêmes formats.
+                          </p>
+                          <div className="table-scroll comparable-list-scroll">
+                            <table className="raw-table">
+                              <thead>
+                                <tr>
+                                  <th>Équipement</th>
+                                  <th>Profil</th>
+                                  <th>Commune</th>
+                                  <th>Caractéristiques</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {filteredComparableComparisonListRows.map((item) => (
+                                  <tr key={item.id}>
+                                    <td>
+                                      <strong>{item.equipement}</strong>
+                                      <div>{item.installation}</div>
+                                    </td>
+                                    <td>{item.profile}</td>
+                                    <td>{item.commune}</td>
+                                    <td>{item.metricsLabel}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  </>
+                ) : (
+                  <p className="subtle-empty">
+                    Aucun bassin n'est disponible pour cette famille comparable sur le territoire actif.
+                  </p>
+                )}
+              </div>
+              ) : null}
+
+              {territoriesView === "comparisons" && selectedEpciCode !== "all" ? (
+              <div className="territory-card">
+                <h3>Couverture selon la typologie des communes</h3>
+                {territoryTypologyRows.length > 0 ? (
+                  <div className="table-scroll">
+                    <table className="raw-table">
+                      <thead>
+                        <tr>
+                          <th>Typologie</th>
+                          <th>Communes</th>
+                          <th>Licences 2023</th>
+                          <th>Bassins</th>
+                          <th>Bassins / 100 000 hab.</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {territoryTypologyRows.map((item) => (
+                          <tr key={item.label}>
+                            <td>{item.label}</td>
+                            <td>{formatInteger(item.communes)}</td>
+                            <td>{formatInteger(item.licences)}</td>
+                            <td>{formatInteger(item.bassins)}</td>
+                            <td>{formatNumber(item.bassinsPer100kHab, 2)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="subtle-empty">
+                    Aucune lecture par typologie communale n'est disponible sur le territoire actif.
+                  </p>
+                )}
+              </div>
+              ) : null}
+
+              {territoriesView === "comparisons" && selectedEpciCode !== "all" ? (
+              <div className="territory-card">
+                <h3>Activités aquatiques présentes</h3>
+                {activeEpci && comparisonEpci && countedTerritoryActivityComparisonRows.length > 0 ? (
+                  <div className="table-scroll">
+                    <table className="raw-table">
+                      <thead>
+                        <tr>
+                          <th>Activité</th>
+                          <th>{activeEpci.epci_nom}</th>
+                          <th>{comparisonEpci.epci_nom}</th>
+                          <th>Écart</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {countedTerritoryActivityComparisonRows.slice(0, 10).map((item) => (
+                          <tr key={item.label}>
+                            <td>{item.label}</td>
+                            <td>{`${formatInteger(item.primaryCount)} (${formatPercent(item.primaryShare)})`}</td>
+                            <td>{`${formatInteger(item.comparisonCount)} (${formatPercent(item.comparisonShare)})`}</td>
+                            <td>{`${getDeltaArrow(item.deltaCount)} ${formatSignedInteger(item.deltaCount)}`}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : countedTerritoryActivityRows.length > 0 ? (
+                  <div className="mini-table compact-mini-table">
+                    <div className="mini-table-head">
+                      <span>Activité</span>
+                      <span>{inventoryCountMode === "equipments" ? "Équipements" : "Installations"}</span>
+                      <span>Part</span>
+                    </div>
+                    {countedTerritoryActivityRows.slice(0, 10).map((item) => (
+                      <div key={item.name} className="mini-table-row">
+                        <span>{item.name}</span>
+                        <span>{formatInteger(item.value)}</span>
+                        <span>{formatPercent(item.share)}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="subtle-empty">
+                    Aucune activité n'est disponible pour construire une lecture territoriale sur le périmètre actif.
+                  </p>
+                )}
+              </div>
+              ) : null}
+
+              {territoriesView === "territory" ? (
               <div className="territory-card">
                 <h3>Pourquoi ce territoire remonte ?</h3>
                 {activeTerritoryInvestigation ? (
@@ -2157,7 +3663,9 @@ function App() {
                   </p>
                 )}
               </div>
+              ) : null}
 
+              {territoriesView === "territory" ? (
               <div className="territory-card">
                 <h3>Mix de gestion local</h3>
                 {territoryManagementBreakdown.length > 0 ? (
@@ -2179,7 +3687,9 @@ function App() {
                   <p className="subtle-empty">Aucun bassin recensé sur le territoire sélectionné.</p>
                 )}
               </div>
+              ) : null}
 
+              {territoriesView === "territory" ? (
               <div className="territory-card">
                 <h3>Communes motrices</h3>
                 {territoryTopCommunes.length > 0 ? (
@@ -2193,7 +3703,7 @@ function App() {
                       <div key={item.code_commune} className="mini-table-row">
                         <span>
                           <strong>{item.commune}</strong>
-                          <small>{item.typo}</small>
+                          <small>{formatCommuneTypology(item.typo)}</small>
                         </span>
                         <span>{formatInteger(item.licences_ffn_2023)}</span>
                         <span>{formatNumber(item.licences_ffn_pour_1000hab, 2)}</span>
@@ -2204,17 +3714,47 @@ function App() {
                   <p className="subtle-empty">Aucune commune licenciée n'est disponible avec la sélection actuelle.</p>
                 )}
               </div>
+              ) : null}
             </div>
           </section>
+          ) : null}
         </>
       ) : null}
 
       {activeTab === "facilities" ? (
+        <>
+          <section className="panel workspace-nav-panel">
+            <div className="panel-heading">
+              <div>
+                <span className="eyebrow">Organisation</span>
+                <h2>Choisir une lecture équipements</h2>
+              </div>
+              <p>
+                L&apos;onglet est réparti en sous-vues pour éviter d&apos;empiler carte, périmètre, propriétés
+                physiques et tableaux sur une seule page.
+              </p>
+            </div>
+            <div className="chip-row workspace-nav-row">
+              {FACILITIES_VIEW_OPTIONS.map((option) => (
+                <button
+                  key={option.key}
+                  type="button"
+                  className={facilitiesView === option.key ? "chip active" : "chip"}
+                  onClick={() => setFacilitiesView(option.key)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <p className="chart-note">{activeFacilitiesView.description}</p>
+          </section>
+
+          {facilitiesView === "map" ? (
         <section className="content-grid content-grid-wide">
           <article className="panel map-panel">
             <div className="panel-heading">
               <div>
-                <span className="eyebrow">Cartographie bassin</span>
+                <span className="eyebrow">Cartographie équipements</span>
                 <h2>Localisation des équipements aquatiques</h2>
               </div>
               <p>{formatInteger(mapPoints.length)} points affichés après filtres.</p>
@@ -2222,7 +3762,7 @@ function App() {
 
             <div className="panel-heading-actions">
               <div className="compact-control compact-control-wide">
-                <label htmlFor="basin-search">Recherche bassin</label>
+                <label htmlFor="basin-search">Recherche équipement</label>
                 <input
                   id="basin-search"
                   type="search"
@@ -2231,7 +3771,40 @@ function App() {
                   onChange={(event) => setBasinSearch(event.target.value)}
                 />
               </div>
+
+              <div className="compact-control">
+                <label htmlFor="locality-type-filter">Typologie communale</label>
+                <select
+                  id="locality-type-filter"
+                  value={localityTypeFilter}
+                  onChange={(event) => setLocalityTypeFilter(event.target.value)}
+                >
+                  <option value="all">Toutes typologies</option>
+                  {availableLocalityTypes.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="compact-control">
+                <label htmlFor="facility-count-mode">Compter en</label>
+                <select
+                  id="facility-count-mode"
+                  value={inventoryCountMode}
+                  onChange={(event) => setInventoryCountMode(event.target.value as InventoryCountMode)}
+                >
+                  <option value="equipments">Équipements</option>
+                  <option value="installations">Installations</option>
+                </select>
+              </div>
             </div>
+
+            <p className="chart-note">
+              Le mode de comptage agit sur les profils, les types et les activités. La carte reste à la
+              maille équipement.
+            </p>
 
             <div className="chip-row">
               <button
@@ -2289,6 +3862,7 @@ function App() {
                       <div className="popup-card">
                         <strong>{item.installation}</strong>
                         <span>{item.equipement}</span>
+                        <span>{item.type_equipement}</span>
                         <span>{item.commune}</span>
                         <span>{item.mode_gestion_calcule}</span>
                         <span>
@@ -2307,7 +3881,7 @@ function App() {
           <article className="panel chart-panel">
             <div className="panel-heading">
               <div>
-                <span className="eyebrow">Gestion des bassins</span>
+                <span className="eyebrow">Gestion des équipements</span>
                 <h2>Répartition du parc aquatique filtré</h2>
               </div>
               <p>Lecture dynamique selon les filtres de gestion, d'usage scolaires et de recherche libre.</p>
@@ -2346,46 +3920,479 @@ function App() {
                 </div>
               </>
             ) : (
-              <p className="subtle-empty">Aucun bassin ne correspond aux filtres actuels.</p>
+              <p className="subtle-empty">Aucun équipement ne correspond aux filtres actuels.</p>
             )}
           </article>
         </section>
-      ) : null}
+          ) : null}
 
-      {activeTab === "licences" ? (
+          {facilitiesView === "scope" ? (
+        <section className="content-grid content-grid-wide">
+          <article className="panel table-panel territory-card-wide">
+            <div className="panel-heading">
+              <div>
+                <span className="eyebrow">Périmètre retenu</span>
+                <h2>Socle bassins et lecture Data ES élargie</h2>
+              </div>
+              <p>
+                Le socle historique reste centré sur la famille « Bassin de natation ». L'extraction
+                complémentaire montre ce que les mêmes sites accueillent au-delà de ce seul périmètre.
+              </p>
+            </div>
+
+            <div className="investigation-summary">
+              <article className="summary-chip">
+                <span className="summary-chip-label">Socle bassins</span>
+                <strong>{formatInteger(comparableScopedBasins.length)}</strong>
+                <small>Équipements de la famille bassin sur le champ courant.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Sites du socle</span>
+                <strong>{formatInteger(comparableScopedInstallationCount)}</strong>
+                <small>Installations couvertes par ce socle sur le même champ.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Extraction élargie</span>
+                <strong>{formatInteger(filteredExtendedInventorySummary.equipmentsTotal)}</strong>
+                <small>Équipements recensés sans se limiter à la seule famille bassin.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Sites de l'extraction</span>
+                <strong>{formatInteger(filteredExtendedInventorySummary.installationsTotal)}</strong>
+                <small>Sites distincts concernés par cette lecture complémentaire.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Écart équipements</span>
+                <strong>
+                  {formatSignedInteger(
+                    filteredExtendedInventorySummary.equipmentsTotal - comparableScopedBasins.length,
+                  )}
+                </strong>
+                <small>Le différentiel vient surtout de la diversification interne des sites.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Écart sites</span>
+                <strong>
+                  {formatSignedInteger(
+                    filteredExtendedInventorySummary.installationsTotal - comparableScopedInstallationCount,
+                  )}
+                </strong>
+                <small>La différence est faible au niveau site, plus forte au niveau équipement.</small>
+              </article>
+            </div>
+
+            <div className="fact-list">
+              <div className="fact-item">
+                <div>
+                  <span>Équipements hors bassin</span>
+                  <small>Volume complémentaire apporté par l'extraction Data ES élargie.</small>
+                </div>
+                <strong>{formatInteger(filteredExtendedInventorySummary.nonBassinFamilyEquipmentsTotal)}</strong>
+              </div>
+              <div className="fact-item">
+                <div>
+                  <span>Sites avec hors bassin</span>
+                  <small>Installations où l'offre ne se limite pas à des bassins de natation.</small>
+                </div>
+                <strong>{formatInteger(filteredExtendedInventorySummary.nonBassinFamilyInstallationsTotal)}</strong>
+              </div>
+              <div className="fact-item">
+                <div>
+                  <span>Familles distinctes</span>
+                  <small>Lecture complète de la diversité d'équipements présents dans les sites piscine.</small>
+                </div>
+                <strong>{formatInteger(filteredExtendedInventorySummary.familiesTotal)}</strong>
+              </div>
+              <div className="fact-item">
+                <div>
+                  <span>Activités distinctes</span>
+                  <small>Pratiques déclarées dans Data ES sur l'extraction élargie.</small>
+                </div>
+                <strong>{formatInteger(filteredExtendedInventorySummary.activitiesTotal)}</strong>
+              </div>
+            </div>
+
+            <p className="chart-note">
+              Cette comparaison suit le département, la typologie communale et la recherche libre. Les
+              filtres de gestion et d'usage scolaires restent propres au socle bassins.
+            </p>
+
+            <div className="fact-list">
+              <div className="fact-item">
+                <div>
+                  <span>Surface pour 1 000 hab.</span>
+                  <small>Lecture agrégée sur le périmètre territorial actif.</small>
+                </div>
+                <strong>
+                  {currentOverview
+                    ? `${formatNumber(
+                        safeDivide(currentOverview.surface_totale_bassins_m2, currentOverview.population_total) *
+                          1000,
+                        2,
+                      )} m²`
+                    : "n.c."}
+                </strong>
+              </div>
+              <div className="fact-item">
+                <div>
+                  <span>Usages scolaires repérés</span>
+                  <small>Signal large fondé sur le type d'utilisation.</small>
+                </div>
+                <strong>{formatInteger(schoolScopeGap.usageCount)}</strong>
+              </div>
+              <div className="fact-item">
+                <div>
+                  <span>Sites scolaires explicites</span>
+                  <small>Signal beaucoup plus restrictif, fondé sur un marquage explicite.</small>
+                </div>
+                <strong>{formatInteger(schoolScopeGap.explicitCount)}</strong>
+              </div>
+              <div className="fact-item">
+                <div>
+                  <span>Écart de signalement scolaire</span>
+                  <small>
+                    {formatPercent(schoolScopeGap.explicitShare)} des usages scolaires seulement sont
+                    explicites.
+                  </small>
+                </div>
+                <strong>{formatInteger(schoolScopeGap.delta)}</strong>
+              </div>
+            </div>
+            <p className="chart-note">
+              Le socle bassin conserve bien les fosses à plongée et les équipements spécialisés
+              aquatiques : {formatInteger(divingEquipmentCount)} fosses et {formatInteger(specializedEquipmentCount)}{" "}
+              équipements spécialisés sur le périmètre bassin.
+            </p>
+          </article>
+        </section>
+          ) : null}
+
+          {facilitiesView === "physical" ? (
         <section className="content-grid content-grid-wide">
           <article className="panel chart-panel">
             <div className="panel-heading">
               <div>
-                <span className="eyebrow">Licences 2024</span>
-                <h2>Structure par âge et sexe</h2>
+                <span className="eyebrow">Propriétés physiques</span>
+                <h2>Tailles, longueurs et intensité du parc affiché</h2>
               </div>
-              <p>Distribution FFN à l'échelle {selectedDepartment === "all" ? "régionale" : "départementale"}.</p>
+              <p>
+                Les dimensions sont lues sur les équipements filtrés pour relier volumes, usages et
+                caractéristiques physiques.
+              </p>
             </div>
 
             <div className="chart-wrap tall">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={ageSeries} margin={{ top: 4, right: 10, bottom: 24, left: 0 }}>
+                <BarChart data={surfaceDistribution} margin={{ top: 4, right: 10, bottom: 24, left: 0 }}>
                   <CartesianGrid strokeDasharray="4 4" vertical={false} stroke="#d2ddd6" />
                   <XAxis
                     dataKey="label"
                     tickLine={false}
                     axisLine={false}
-                    angle={-35}
-                    textAnchor="end"
                     interval={0}
-                    height={84}
+                    angle={-20}
+                    textAnchor="end"
+                    height={70}
                   />
                   <YAxis tickLine={false} axisLine={false} />
                   <Tooltip content={<ChartTooltip />} />
-                  <Bar dataKey="Femmes" stackId="a" fill="#ff8f5c" radius={[6, 6, 0, 0]} />
-                  <Bar dataKey="Hommes" stackId="a" fill="#0f7c82" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="value" fill="#0f7c82" radius={[8, 8, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
+
+            <div className="fact-list">
+              <div className="fact-item">
+                <div>
+                  <span>Surface totale affichée</span>
+                  <small>Somme des surfaces renseignées sur les équipements visibles.</small>
+                </div>
+                <strong>{`${formatNumber(physicalStats.totalSurface, 0)} m²`}</strong>
+              </div>
+              <div className="fact-item">
+                <div>
+                  <span>Surface moyenne</span>
+                  <small>{formatPercent(physicalStats.surfaceCoverage)} des équipements ont une surface renseignée.</small>
+                </div>
+                <strong>{`${formatNumber(physicalStats.averageSurface, 0)} m²`}</strong>
+              </div>
+              <div className="fact-item">
+                <div>
+                  <span>Longueur moyenne</span>
+                  <small>{formatPercent(physicalStats.lengthCoverage)} des équipements ont une longueur renseignée.</small>
+                </div>
+                <strong>{`${formatNumber(physicalStats.averageLength, 1)} m`}</strong>
+              </div>
+              <div className="fact-item">
+                <div>
+                  <span>Nombre moyen de couloirs</span>
+                  <small>{formatPercent(physicalStats.lanesCoverage)} des équipements ont ce champ renseigné.</small>
+                </div>
+                <strong>{formatNumber(physicalStats.averageLanes, 1)}</strong>
+              </div>
+            </div>
+
+            <div className="mini-table compact-mini-table">
+              <div className="mini-table-head">
+                <span>Format de longueur</span>
+                <span>Équipements</span>
+                <span>Part</span>
+              </div>
+              {lengthDistribution.map((item) => (
+                <div key={item.label} className="mini-table-row">
+                  <span>{item.label}</span>
+                  <span>{formatInteger(item.value)}</span>
+                  <span>{formatPercent(safeDivide(item.value, filteredBasins.length))}</span>
+                </div>
+              ))}
+            </div>
+          </article>
+        </section>
+          ) : null}
+
+          {facilitiesView === "inventory" ? (
+        <section className="content-grid content-grid-wide">
+          <article className="panel table-panel territory-card-wide">
+            <div className="panel-heading">
+              <div>
+                <span className="eyebrow">Familles et types</span>
+                <h2>Socle bassin et extraction complémentaire</h2>
+              </div>
+              <p>
+                Les tableaux ci-dessous montrent l'ensemble des lignes disponibles, pas seulement les
+                postes dominants.
+              </p>
+            </div>
+
+            <p className="chart-note">Le comptage affiché dans cette table est lu en {inventoryCountModeLabel}.</p>
+
+            <div className="breakdown-section">
+              <h3>Socle bassins retenu</h3>
+              <BreakdownTable
+                rows={countedTypeBreakdown}
+                labelHeader="Type d'équipement"
+                countHeader={inventoryCountMode === "equipments" ? "Équipements" : "Installations"}
+                emptyMessage="Aucun type d'équipement n'est disponible sur les filtres actifs."
+              />
+            </div>
+
+            <div className="breakdown-section">
+              <h3>Familles dans l'extraction Data ES élargie</h3>
+              <BreakdownTable
+                rows={extendedFamilyBreakdown}
+                labelHeader="Famille d'équipement"
+                countHeader={inventoryCountMode === "equipments" ? "Équipements" : "Installations"}
+                emptyMessage="Aucune famille n'est disponible sur le champ de comparaison courant."
+              />
+            </div>
+
+            <div className="breakdown-section">
+              <h3>Types dans l'extraction Data ES élargie</h3>
+              <BreakdownTable
+                rows={extendedTypeBreakdown}
+                labelHeader="Type d'équipement"
+                countHeader={inventoryCountMode === "equipments" ? "Équipements" : "Installations"}
+                emptyMessage="Aucun type n'est disponible dans l'extraction Data ES élargie."
+              />
+            </div>
+
+            <div className="breakdown-section">
+              <h3>Configurations de site</h3>
+              <BreakdownTable
+                rows={extendedParticularityBreakdown}
+                labelHeader="Configuration"
+                countHeader={inventoryCountMode === "equipments" ? "Équipements" : "Installations"}
+                emptyMessage="Aucune configuration de site n'est disponible dans l'extraction élargie."
+              />
+            </div>
           </article>
 
-          <article className="panel table-panel">
+          <article className="panel table-panel territory-card-wide">
+            <div className="panel-heading">
+              <div>
+                <span className="eyebrow">Activités recensées</span>
+                <h2>Lecture complète des pratiques déclarées</h2>
+              </div>
+              <p>
+                Les activités permettent de raisonner comme Data ES : site, équipements présents, puis
+                pratiques effectivement associées.
+              </p>
+            </div>
+
+            <p className="chart-note">Le comptage affiché dans cette table est lu en {inventoryCountModeLabel}.</p>
+
+            <div className="breakdown-section">
+              <h3>Socle bassins retenu</h3>
+              <BreakdownTable
+                rows={countedActivityBreakdown}
+                labelHeader="Activité"
+                countHeader={inventoryCountMode === "equipments" ? "Équipements" : "Installations"}
+                emptyMessage="Aucune activité n'est disponible sur les filtres actifs."
+              />
+            </div>
+
+            <div className="breakdown-section">
+              <h3>Extraction Data ES élargie</h3>
+              <BreakdownTable
+                rows={extendedActivityBreakdown}
+                labelHeader="Activité"
+                countHeader={inventoryCountMode === "equipments" ? "Équipements" : "Installations"}
+                emptyMessage="Aucune activité n'est disponible dans l'extraction Data ES élargie."
+              />
+            </div>
+          </article>
+        </section>
+          ) : null}
+
+          {facilitiesView === "territories" ? (
+        <section className="content-grid content-grid-wide">
+          <article className="panel table-panel territory-card-wide">
+            <div className="panel-heading">
+              <div>
+                <span className="eyebrow">Lecture territoriale</span>
+                <h2>Surface par habitant selon les EPCI</h2>
+              </div>
+              <p>
+                Le ratio surface / population apporte une lecture plus physique que le simple nombre
+                d'équipements. Il est calculé à partir des surfaces agrégées du socle EPCI.
+              </p>
+            </div>
+
+            {territorySurfaceRows.length > 0 ? (
+              <div className="table-scroll">
+                <table className="raw-table">
+                  <thead>
+                    <tr>
+                      <th>EPCI</th>
+                      <th>Surface totale</th>
+                      <th>Surface / 1 000 hab.</th>
+                      <th>Équipements</th>
+                      <th>Surface moyenne</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {territorySurfaceRows.map((item) => (
+                      <tr key={item.epci_code}>
+                        <td>
+                          <strong>{item.epci_nom}</strong>
+                          <div>{shortDepartment(item.departement)}</div>
+                        </td>
+                        <td>{`${formatNumber(item.totalSurface, 0)} m²`}</td>
+                        <td>{`${formatNumber(item.surfacePer1000Hab, 2)} m²`}</td>
+                        <td>{formatInteger(item.bassins)}</td>
+                        <td>{`${formatNumber(item.averageSurface, 0)} m²`}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="subtle-empty">Aucun EPCI avec surface agrégée n'est disponible sur le périmètre actif.</p>
+            )}
+          </article>
+        </section>
+          ) : null}
+        </>
+      ) : null}
+
+      {activeTab === "licences" ? (
+        <>
+          <section className="content-grid content-grid-wide">
+            <article className="panel chart-panel">
+              <div className="panel-heading">
+                <div>
+                  <span className="eyebrow">Licences 2024</span>
+                  <h2>Structure par âge et sexe</h2>
+                </div>
+                <p>
+                  Distribution FFN à l'échelle {selectedDepartment === "all" ? "régionale" : "départementale"}.
+                </p>
+              </div>
+
+              <div className="chart-wrap tall">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={ageSeries} margin={{ top: 4, right: 10, bottom: 24, left: 0 }}>
+                    <CartesianGrid strokeDasharray="4 4" vertical={false} stroke="#d2ddd6" />
+                    <XAxis
+                      dataKey="label"
+                      tickLine={false}
+                      axisLine={false}
+                      angle={-35}
+                      textAnchor="end"
+                      interval={0}
+                      height={84}
+                    />
+                    <YAxis tickLine={false} axisLine={false} />
+                    <Tooltip content={<ChartTooltip />} />
+                    <Bar dataKey="Femmes" stackId="a" fill="#ff8f5c" radius={[6, 6, 0, 0]} />
+                    <Bar dataKey="Hommes" stackId="a" fill="#0f7c82" radius={[6, 6, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </article>
+
+            <article className="panel table-panel">
+              <div className="panel-heading">
+                <div>
+                  <span className="eyebrow">Évolution 2023 → 2024</span>
+                  <h2>Delta départemental des licences</h2>
+                </div>
+                <p>
+                  Les deux millésimes sont disponibles à la maille départementale. Le delta met en évidence
+                  les dynamiques de progression ou de repli.
+                </p>
+              </div>
+
+              <div className="investigation-summary">
+                <article className="summary-chip">
+                  <span className="summary-chip-label">Licences 2023</span>
+                  <strong>{formatInteger(licenceTrendSummary.licences2023)}</strong>
+                  <small>Base de comparaison du périmètre actif.</small>
+                </article>
+                <article className="summary-chip">
+                  <span className="summary-chip-label">Licences 2024</span>
+                  <strong>{formatInteger(licenceTrendSummary.licences2024)}</strong>
+                  <small>Millésime le plus récent disponible dans le dashboard.</small>
+                </article>
+                <article className="summary-chip">
+                  <span className="summary-chip-label">Delta brut</span>
+                  <strong>{formatSignedInteger(licenceTrendSummary.delta)}</strong>
+                  <small>{formatSignedPercent(licenceTrendSummary.deltaShare)} par rapport à 2023.</small>
+                </article>
+              </div>
+
+              {licenceTrendRows.length > 0 ? (
+                <div className="table-scroll">
+                  <table className="raw-table">
+                    <thead>
+                      <tr>
+                        <th>Département</th>
+                        <th>Licences 2023</th>
+                        <th>Licences 2024</th>
+                        <th>Delta</th>
+                        <th>Évolution</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {licenceTrendRows.map((item) => (
+                        <tr key={item.code}>
+                          <td>{item.label}</td>
+                          <td>{formatInteger(item.licences2023)}</td>
+                          <td>{formatInteger(item.licences2024)}</td>
+                          <td>{formatSignedInteger(item.delta)}</td>
+                          <td>{`${getDeltaArrow(item.delta)} ${formatSignedPercent(item.deltaShare)}`}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="subtle-empty">Aucune évolution départementale n'est disponible sur le périmètre actif.</p>
+              )}
+            </article>
+          </section>
+
+          <section className="panel table-panel">
             <div className="panel-heading">
               <div>
                 <span className="eyebrow">Pression territoriale</span>
@@ -2415,8 +4422,8 @@ function App() {
             ) : (
               <p className="subtle-empty">Aucune commune sous pression n'est remontée sur le périmètre actif.</p>
             )}
-          </article>
-        </section>
+          </section>
+        </>
       ) : null}
 
       {activeTab === "data" ? (
@@ -2654,7 +4661,12 @@ function InvestigationScoreBreakdown({
       <div className="score-breakdown-row score-breakdown-row-primary">
         <div className="score-breakdown-copy">
           <strong>Composite</strong>
-          <small>34 % sous-équipement + 38 % tension + 28 % impact</small>
+          <small>
+            {formatInteger(Math.round(SCORING_CONFIG.priorityWeights.offer_gap * 100))} % sous-équipement
+            {" + "}
+            {formatInteger(Math.round(SCORING_CONFIG.priorityWeights.pressure * 100))} % tension +{" "}
+            {formatInteger(Math.round(SCORING_CONFIG.priorityWeights.impact * 100))} % impact
+          </small>
         </div>
         <strong className="score-breakdown-value">{formatScore(item.priorityScore)}</strong>
         <small className="score-breakdown-rank">{formatRankPosition(rankMaps.priority.get(item.epci_code), total)}</small>
@@ -2685,6 +4697,45 @@ function InvestigationScoreBreakdown({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function BreakdownTable({
+  rows,
+  labelHeader,
+  countHeader,
+  emptyMessage,
+}: {
+  rows: Array<{ name: string; value: number; share: number }>;
+  labelHeader: string;
+  countHeader: string;
+  emptyMessage: string;
+}) {
+  if (rows.length === 0) {
+    return <p className="subtle-empty">{emptyMessage}</p>;
+  }
+
+  return (
+    <div className="table-scroll breakdown-table-scroll">
+      <table className="raw-table">
+        <thead>
+          <tr>
+            <th>{labelHeader}</th>
+            <th>{countHeader}</th>
+            <th>Part</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((item) => (
+            <tr key={item.name}>
+              <td>{item.name}</td>
+              <td>{formatInteger(item.value)}</td>
+              <td>{formatPercent(item.share)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -2869,6 +4920,519 @@ function buildPressureCommunes(communes: CommuneRecord[]) {
     .slice(0, 8);
 }
 
+function formatCommuneTypology(value: string | null | undefined) {
+  if (!value) {
+    return "Non renseigné";
+  }
+
+  return value.replace(/^\d+\./, "").trim() || "Non renseigné";
+}
+
+function countUnique(values: Array<string | null | undefined>) {
+  return new Set(values.filter((value): value is string => Boolean(value))).size;
+}
+
+function isDivingEquipment(item: Pick<BasinRecord, "type_equipement">) {
+  return item.type_equipement.toLowerCase().includes("fosse");
+}
+
+function getDetailedComparableBasinProfile(item: BasinRecord) {
+  const equipmentType = (item.type_equipement || "").toLowerCase();
+  const length = typeof item.longueur_m === "number" ? item.longueur_m : null;
+  const surface = typeof item.surface_bassin_m2 === "number" ? item.surface_bassin_m2 : null;
+  const lanes = typeof item.nb_couloirs === "number" ? item.nb_couloirs : null;
+  const maxDepth = typeof item.profondeur_max_m === "number" ? item.profondeur_max_m : null;
+
+  if (equipmentType.includes("fosse")) {
+    if (maxDepth !== null && maxDepth >= 15) {
+      return "Fosse de 15 m et +";
+    }
+    if (maxDepth !== null && maxDepth >= 10) {
+      return "Fosse de 10 à 14,9 m";
+    }
+    return "Fosse / plongée";
+  }
+  if (equipmentType.includes("toboggan")) {
+    return surface !== null && surface >= 100 ? "Réception de toboggan structurante" : "Réception de toboggan";
+  }
+  if (equipmentType.includes("ludique")) {
+    if (surface !== null && surface >= 300) {
+      return "Bassin ludique structurant";
+    }
+    if (maxDepth !== null && maxDepth <= 1.4) {
+      return "Bassin ludique peu profond";
+    }
+    return "Bassin ludique";
+  }
+  if (equipmentType.includes("mixte")) {
+    if (length !== null && length >= 25) {
+      return "Bassin mixte 25 m et +";
+    }
+    if (surface !== null && surface >= 250) {
+      return "Bassin mixte structurant";
+    }
+    return "Bassin mixte de proximité";
+  }
+  if (equipmentType.includes("sportif")) {
+    if (length !== null && length >= 50) {
+      return "Bassin sportif 50 m";
+    }
+    if (length !== null && length >= 25 && lanes !== null && lanes >= 8) {
+      return "Bassin sportif 25 m 8 couloirs et +";
+    }
+    if (length !== null && length >= 25) {
+      return "Bassin sportif 25 m";
+    }
+    if (surface !== null && surface >= 250) {
+      return "Bassin sportif compact";
+    }
+    return "Bassin sportif court";
+  }
+  if (length !== null && length >= 50) {
+    return "Grand bassin 50 m et +";
+  }
+  if (length !== null && length >= 25) {
+    return "Grand bassin 25 m";
+  }
+  if (length !== null && length >= 15) {
+    return "Bassin intermédiaire";
+  }
+  return item.type_equipement || "Autre équipement aquatique";
+}
+
+function getComparableProfileScopeFromLabel(label: string): ComparableProfileScope {
+  const normalizedLabel = label.toLowerCase();
+
+  if (normalizedLabel.includes("fosse")) {
+    return "fosse";
+  }
+  if (normalizedLabel.includes("ludique")) {
+    return "ludique";
+  }
+  if (normalizedLabel.includes("mixte")) {
+    return "mixte";
+  }
+  if (normalizedLabel.includes("50 m")) {
+    return "sport_50";
+  }
+  if (normalizedLabel.includes("25 m")) {
+    return "sport_25";
+  }
+  return "specialized";
+}
+
+function matchesComparableProfileScope(item: BasinRecord, scope: ComparableProfileScope) {
+  if (scope === "all") {
+    return true;
+  }
+  return getComparableProfileScopeFromLabel(getDetailedComparableBasinProfile(item)) === scope;
+}
+
+function matchesComparableBasinContext(item: BasinRecord, context: ComparableBasinContext) {
+  if (context === "all") {
+    return true;
+  }
+  if (context === "school") {
+    return item.usage_scolaires === 1;
+  }
+  return item.qpv_flag === 1 || item.qpv_200m_flag === 1;
+}
+
+function buildComparableProfileSummary(basins: BasinRecord[]): ComparableProfileSummary {
+  const lengths = basins
+    .map((item) => item.longueur_m)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  const surfaces = basins
+    .map((item) => item.surface_bassin_m2)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  const lanes = basins
+    .map((item) => item.nb_couloirs)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  const maxDepths = basins
+    .map((item) => item.profondeur_max_m)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+
+  return {
+    equipmentCount: basins.length,
+    installationCount: countUnique(basins.map((item) => item.id_installation)),
+    averageLength: average(lengths),
+    averageSurface: average(surfaces),
+    averageLanes: average(lanes),
+    averageMaxDepth: average(maxDepths),
+  };
+}
+
+function buildComparableProfileCoverageRows(basins: BasinRecord[]) {
+  const equipmentRows = buildInventoryPresenceRows(basins, getDetailedComparableBasinProfile, "equipments");
+  const installationRows = buildInventoryPresenceRows(basins, getDetailedComparableBasinProfile, "installations");
+  const installationRowMap = new Map(installationRows.map((item) => [item.label, item]));
+  const labels = Array.from(
+    new Set([...equipmentRows.map((item) => item.label), ...installationRows.map((item) => item.label)]),
+  );
+
+  return labels
+    .map((label) => {
+      const equipmentRow = equipmentRows.find((item) => item.label === label);
+      const installationRow = installationRowMap.get(label);
+
+      return {
+        label,
+        equipmentCount: equipmentRow?.count ?? 0,
+        equipmentShare: equipmentRow?.share ?? 0,
+        installationCount: installationRow?.count ?? 0,
+        installationShare: installationRow?.share ?? 0,
+      };
+    })
+    .sort((left, right) => {
+      if (right.equipmentCount !== left.equipmentCount) {
+        return right.equipmentCount - left.equipmentCount;
+      }
+      if (right.installationCount !== left.installationCount) {
+        return right.installationCount - left.installationCount;
+      }
+      return left.label.localeCompare(right.label, "fr");
+    });
+}
+
+function buildComparableProfileComparisonRows(primaryBasins: BasinRecord[], comparisonBasins: BasinRecord[]) {
+  const primaryRows = buildComparableProfileCoverageRows(primaryBasins);
+  const comparisonRows = buildComparableProfileCoverageRows(comparisonBasins);
+  const primaryRowMap = new Map(primaryRows.map((item) => [item.label, item]));
+  const comparisonRowMap = new Map(comparisonRows.map((item) => [item.label, item]));
+  const labels = Array.from(
+    new Set([...primaryRows.map((item) => item.label), ...comparisonRows.map((item) => item.label)]),
+  );
+
+  return labels
+    .map((label) => {
+      const primary = primaryRowMap.get(label);
+      const comparison = comparisonRowMap.get(label);
+
+      return {
+        label,
+        primaryEquipmentCount: primary?.equipmentCount ?? 0,
+        primaryEquipmentShare: primary?.equipmentShare ?? 0,
+        primaryInstallationCount: primary?.installationCount ?? 0,
+        primaryInstallationShare: primary?.installationShare ?? 0,
+        comparisonEquipmentCount: comparison?.equipmentCount ?? 0,
+        comparisonEquipmentShare: comparison?.equipmentShare ?? 0,
+        comparisonInstallationCount: comparison?.installationCount ?? 0,
+        comparisonInstallationShare: comparison?.installationShare ?? 0,
+        deltaEquipmentCount: (primary?.equipmentCount ?? 0) - (comparison?.equipmentCount ?? 0),
+      };
+    })
+    .sort((left, right) => {
+      const rightVolume = Math.max(right.primaryEquipmentCount, right.comparisonEquipmentCount);
+      const leftVolume = Math.max(left.primaryEquipmentCount, left.comparisonEquipmentCount);
+      if (rightVolume !== leftVolume) {
+        return rightVolume - leftVolume;
+      }
+      return left.label.localeCompare(right.label, "fr");
+    });
+}
+
+function buildComparableBasinListRows(basins: BasinRecord[]) {
+  return [...basins]
+    .map((item) => ({
+      id: item.id_equipement,
+      equipement: item.equipement,
+      installation: item.installation,
+      commune: item.commune,
+      profile: getDetailedComparableBasinProfile(item),
+      metricsLabel: formatComparableBasinMetrics(item),
+      sortLength: item.longueur_m ?? -1,
+      sortSurface: item.surface_bassin_m2 ?? -1,
+    }))
+    .sort((left, right) => {
+      if (right.sortLength !== left.sortLength) {
+        return right.sortLength - left.sortLength;
+      }
+      if (right.sortSurface !== left.sortSurface) {
+        return right.sortSurface - left.sortSurface;
+      }
+      const profileCompare = left.profile.localeCompare(right.profile, "fr");
+      if (profileCompare !== 0) {
+        return profileCompare;
+      }
+      return left.equipement.localeCompare(right.equipement, "fr");
+    });
+}
+
+function formatComparableBasinMetrics(item: BasinRecord) {
+  const metrics: string[] = [];
+
+  if (typeof item.longueur_m === "number" && Number.isFinite(item.longueur_m)) {
+    metrics.push(`${formatNumber(item.longueur_m, 0)} m`);
+  }
+  if (typeof item.surface_bassin_m2 === "number" && Number.isFinite(item.surface_bassin_m2)) {
+    metrics.push(`${formatNumber(item.surface_bassin_m2, 0)} m²`);
+  }
+  if (typeof item.nb_couloirs === "number" && Number.isFinite(item.nb_couloirs)) {
+    metrics.push(`${formatNumber(item.nb_couloirs, 0)} couloirs`);
+  }
+  if (typeof item.profondeur_max_m === "number" && Number.isFinite(item.profondeur_max_m)) {
+    metrics.push(`prof. max ${formatNumber(item.profondeur_max_m, 1)} m`);
+  }
+
+  return metrics.length > 0 ? metrics.join(" · ") : "Dimensions non renseignées";
+}
+
+function buildInventoryPresenceRows<T extends InventoryCountableRecord>(
+  items: T[],
+  getLabel: (item: T) => string,
+  mode: InventoryCountMode,
+) {
+  if (mode === "equipments") {
+    const counters = new Map<string, number>();
+    items.forEach((item) => {
+      const key = getLabel(item);
+      counters.set(key, (counters.get(key) ?? 0) + 1);
+    });
+
+    return Array.from(counters.entries())
+      .map(([label, count]) => ({
+        label,
+        count,
+        share: safeDivide(count, items.length),
+      }))
+      .sort((left, right) => right.count - left.count);
+  }
+
+  const installationGroups = new Map<string, Set<string>>();
+  items.forEach((item) => {
+    const installationKey = item.id_installation || item.id_equipement;
+    const labels = installationGroups.get(installationKey) ?? new Set<string>();
+    labels.add(getLabel(item));
+    installationGroups.set(installationKey, labels);
+  });
+
+  const counters = new Map<string, number>();
+  installationGroups.forEach((labels) => {
+    labels.forEach((label) => {
+      counters.set(label, (counters.get(label) ?? 0) + 1);
+    });
+  });
+
+  return Array.from(counters.entries())
+    .map(([label, count]) => ({
+      label,
+      count,
+      share: safeDivide(count, installationGroups.size),
+    }))
+    .sort((left, right) => right.count - left.count);
+}
+
+function buildInventoryTypeBreakdownRows<T extends InventoryTypedRecord>(items: T[], mode: InventoryCountMode) {
+  return buildInventoryPresenceRows(
+    items,
+    (item) => item.type_equipement || "Type non renseigné",
+    mode,
+  ).map((item) => ({
+    name: item.label,
+    value: item.count,
+    share: item.share,
+    kind: "count" as const,
+    seriesLabel: mode === "equipments" ? "Équipements" : "Installations",
+  }));
+}
+
+function buildExtendedInventoryFamilyBreakdownRows(
+  inventory: ExtendedInventoryRecord[],
+  mode: InventoryCountMode,
+) {
+  return buildInventoryPresenceRows(
+    inventory,
+    (item) => item.famille_equipement || "Famille non renseignée",
+    mode,
+  ).map((item) => ({
+    name: item.label,
+    value: item.count,
+    share: item.share,
+    kind: "count" as const,
+    seriesLabel: mode === "equipments" ? "Équipements" : "Installations",
+  }));
+}
+
+function buildExtendedInventoryParticularityRows(
+  inventory: ExtendedInventoryRecord[],
+  mode: InventoryCountMode,
+) {
+  return buildInventoryPresenceRows(
+    inventory,
+    (item) =>
+      item.particularite_installation_brute ||
+      item.particularite_installation ||
+      "Installation non renseignée",
+    mode,
+  ).map((item) => ({
+    name: item.label,
+    value: item.count,
+    share: item.share,
+    kind: "count" as const,
+    seriesLabel: mode === "equipments" ? "Équipements" : "Installations",
+  }));
+}
+
+function buildExtendedInventorySummary(inventory: ExtendedInventoryRecord[]): InventoryScopeSummary {
+  const bassinFamily = inventory.filter((item) => item.famille_equipement === "Bassin de natation");
+  const nonBassinFamily = inventory.filter((item) => item.famille_equipement !== "Bassin de natation");
+  const activities = new Set<string>();
+
+  inventory.forEach((item) => {
+    parseActivities(item.activites).forEach((activity) => activities.add(activity));
+  });
+
+  return {
+    equipmentsTotal: inventory.length,
+    installationsTotal: countUnique(inventory.map((item) => item.id_installation)),
+    bassinFamilyEquipmentsTotal: bassinFamily.length,
+    bassinFamilyInstallationsTotal: countUnique(bassinFamily.map((item) => item.id_installation)),
+    nonBassinFamilyEquipmentsTotal: nonBassinFamily.length,
+    nonBassinFamilyInstallationsTotal: countUnique(nonBassinFamily.map((item) => item.id_installation)),
+    familiesTotal: countUnique(inventory.map((item) => item.famille_equipement)),
+    typesTotal: countUnique(inventory.map((item) => item.type_equipement)),
+    activitiesTotal: activities.size,
+  };
+}
+
+function parseActivities(value: string | null | undefined) {
+  if (!value) {
+    return [];
+  }
+
+  return value
+    .split(value.includes("|") ? "|" : ",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function buildInventoryActivityRows<T extends InventoryActivityRecord>(items: T[], mode: InventoryCountMode) {
+  if (mode === "equipments") {
+    const counters = new Map<string, number>();
+    items.forEach((item) => {
+      parseActivities(item.activites).forEach((activity) => {
+        counters.set(activity, (counters.get(activity) ?? 0) + 1);
+      });
+    });
+
+    return Array.from(counters.entries())
+      .map(([name, value]) => ({
+        name,
+        value,
+        share: safeDivide(value, items.length),
+      }))
+      .sort((left, right) => right.value - left.value);
+  }
+
+  const installationActivities = new Map<string, Set<string>>();
+  items.forEach((item) => {
+    const installationKey = item.id_installation || item.id_equipement;
+    const activities = installationActivities.get(installationKey) ?? new Set<string>();
+    parseActivities(item.activites).forEach((activity) => activities.add(activity));
+    installationActivities.set(installationKey, activities);
+  });
+
+  const counters = new Map<string, number>();
+  installationActivities.forEach((activities) => {
+    activities.forEach((activity) => {
+      counters.set(activity, (counters.get(activity) ?? 0) + 1);
+    });
+  });
+
+  return Array.from(counters.entries())
+    .map(([name, value]) => ({
+      name,
+      value,
+      share: safeDivide(value, installationActivities.size),
+    }))
+    .sort((left, right) => right.value - left.value);
+}
+
+function buildComparableInventoryActivityRows(
+  primaryBasins: BasinRecord[],
+  comparisonBasins: BasinRecord[],
+  mode: InventoryCountMode,
+) {
+  const primaryRows = buildInventoryActivityRows(primaryBasins, mode);
+  const comparisonRows = buildInventoryActivityRows(comparisonBasins, mode);
+  const labels = Array.from(
+    new Set([...primaryRows.map((item) => item.name), ...comparisonRows.map((item) => item.name)]),
+  );
+
+  return labels
+    .map((label) => {
+      const primary = primaryRows.find((item) => item.name === label);
+      const comparison = comparisonRows.find((item) => item.name === label);
+      const primaryCount = primary?.value ?? 0;
+      const comparisonCount = comparison?.value ?? 0;
+
+      return {
+        label,
+        primaryCount,
+        primaryShare: primary?.share ?? 0,
+        comparisonCount,
+        comparisonShare: comparison?.share ?? 0,
+        deltaCount: primaryCount - comparisonCount,
+      };
+    })
+    .sort((left, right) => {
+      const volumeGap =
+        Math.max(right.primaryCount, right.comparisonCount) - Math.max(left.primaryCount, left.comparisonCount);
+      if (volumeGap !== 0) {
+        return volumeGap;
+      }
+      return left.label.localeCompare(right.label, "fr");
+    });
+}
+
+function buildTerritoryTypologyRows(communes: CommuneRecord[], basins: BasinRecord[]) {
+  const basinCounters = new Map<string, number>();
+  basins.forEach((item) => {
+    const label = formatCommuneTypology(
+      communes.find((commune) => commune.code_commune === item.code_commune)?.typo,
+    );
+    basinCounters.set(label, (basinCounters.get(label) ?? 0) + 1);
+  });
+
+  const counters = new Map<
+    string,
+    {
+      communes: number;
+      population: number;
+      licences: number;
+    }
+  >();
+
+  communes.forEach((item) => {
+    const label = formatCommuneTypology(item.typo);
+    const current = counters.get(label) ?? {
+      communes: 0,
+      population: 0,
+      licences: 0,
+    };
+
+    counters.set(label, {
+      communes: current.communes + 1,
+      population: current.population + item.population_2023,
+      licences: current.licences + item.licences_ffn_2023,
+    });
+  });
+
+  return Array.from(counters.entries())
+    .map(([label, value]) => {
+      const bassins = basinCounters.get(label) ?? 0;
+
+      return {
+        label,
+        communes: value.communes,
+        licences: value.licences,
+        bassins,
+        bassinsPer100kHab: safeDivide(bassins, value.population) * 100000,
+      };
+    })
+    .sort((left, right) => right.bassinsPer100kHab - left.bassinsPer100kHab);
+}
+
 function countCommunesWithLicences(communes: CommuneRecord[]) {
   return communes.filter((item) => item.licences_ffn_2023 > 0).length;
 }
@@ -2943,227 +5507,6 @@ function buildOrdinalRankMap<T extends { epci_code: string }>(
       })
       .map((item, index) => [item.epci_code, index + 1]),
   );
-}
-
-function classifyInvestigationProfile(
-  offerGapIndex: number,
-  pressureIndex: number,
-  impactIndex: number,
-) {
-  if (offerGapIndex >= 0.62 && pressureIndex >= 0.64) {
-    return "Sous-équipement sous tension";
-  }
-  if (pressureIndex >= 0.68 && impactIndex >= 0.72) {
-    return "Tension d'usage à fort impact";
-  }
-  if (offerGapIndex >= 0.62 && impactIndex >= 0.68) {
-    return "Déficit structurant";
-  }
-  if (offerGapIndex >= 0.62) {
-    return "Sous-dotation de couverture";
-  }
-  if (pressureIndex >= 0.64) {
-    return "Tension d'usage";
-  }
-  if (impactIndex >= 0.72) {
-    return "Impact territorial élevé";
-  }
-  if (pressureIndex >= 0.5 || offerGapIndex >= 0.5) {
-    return "Équilibre fragile";
-  }
-  return "Socle intermédiaire";
-}
-
-function buildInvestigationHypothesis({
-  profile,
-  bassinsPour100kHab,
-  licencesFfnParBassin,
-  licencesFfnPour1000Hab,
-  licencesFfnPour100M2,
-  communesSansBassinVolume,
-  communesSansBassinShare,
-  qpvPopulation,
-  qpvShare,
-  surfaceM2Pour1000Hab,
-}: {
-  profile: string;
-  bassinsPour100kHab: number;
-  licencesFfnParBassin: number;
-  licencesFfnPour1000Hab: number;
-  licencesFfnPour100M2: number;
-  communesSansBassinVolume: number;
-  communesSansBassinShare: number;
-  qpvPopulation: number;
-  qpvShare: number;
-  surfaceM2Pour1000Hab: number;
-}) {
-  if (profile === "Sous-équipement sous tension") {
-    if (communesSansBassinVolume >= 25 || communesSansBassinShare >= 0.45) {
-      return "Vérifier un déficit de couverture structurant : de nombreuses communes contributrices restent sans bassin sur le territoire.";
-    }
-    if (licencesFfnPour100M2 >= 16 || licencesFfnParBassin >= 140) {
-      return "Vérifier une saturation des bassins existants : la pression FFN est élevée au regard de la surface et des équipements disponibles.";
-    }
-    return "Croiser couverture, capacité réelle et accès interterritorial pour qualifier un manque d'offre.";
-  }
-
-  if (profile === "Tension d'usage à fort impact") {
-    if (qpvPopulation >= 15000 || qpvShare >= 0.12) {
-      return "Territoire de masse critique : besoin potentiellement fort sur les créneaux, avec un enjeu social marqué à documenter.";
-    }
-    return "Offre existante mais tension élevée sur un territoire de grand poids : utile pour investiguer la saturation réelle des usages.";
-  }
-
-  if (profile === "Déficit structurant") {
-    return "Le territoire cumule retrait d'offre et poids territorial notable : utile pour tester un besoin d'investissement ou de rééquilibrage.";
-  }
-
-  if (profile === "Sous-dotation de couverture") {
-    if (surfaceM2Pour1000Hab < 7 || bassinsPour100kHab < 4) {
-      return "Approfondir la dépendance aux bassins voisins et la capacité locale à absorber de nouveaux usages.";
-    }
-    return "Tester d'abord l'accessibilité réelle aux équipements et les écarts entre communes du même EPCI.";
-  }
-
-  if (profile === "Tension d'usage") {
-    if (licencesFfnPour1000Hab >= 6 || licencesFfnParBassin >= 120) {
-      return "Approfondir la saturation des bassins et l'arbitrage des créneaux sur les usages scolaires, clubs et grand public.";
-    }
-    if (qpvShare >= 0.08) {
-      return "Approfondir les usages autour des quartiers prioritaires et la disponibilité effective des créneaux.";
-    }
-    return "Offre présente mais forte intensité d'usage : vérifier saturation, spécialisation et arbitrages de créneaux.";
-  }
-
-  if (profile === "Impact territorial élevé") {
-    return "Territoire à fort volume de population ou de licences : même un déséquilibre modéré peut y produire un effet massif.";
-  }
-
-  if (profile === "Équilibre fragile") {
-    return "Territoire intermédiaire : utile pour vérifier les contrastes internes entre communes équipées et communes contributrices.";
-  }
-
-  return "Socle plutôt favorable : territoire repère pour comparaison ou pour détecter des fragilités locales plus fines.";
-}
-
-function buildPriorityDrivers({
-  bassinsPour100kHab,
-  licencesFfnParBassin,
-  licencesFfnPour1000Hab,
-  licencesFfnPour100M2,
-  communesSansBassinVolume,
-  communesSansBassinShare,
-  population,
-  licences,
-  qpvPopulation,
-  qpvShare,
-}: {
-  bassinsPour100kHab: number;
-  licencesFfnParBassin: number;
-  licencesFfnPour1000Hab: number;
-  licencesFfnPour100M2: number;
-  communesSansBassinVolume: number;
-  communesSansBassinShare: number;
-  population: number;
-  licences: number;
-  qpvPopulation: number;
-  qpvShare: number;
-}) {
-  const reasons = [
-    {
-      score: licencesFfnParBassin,
-      text: `Pression club élevée : ${formatNumber(licencesFfnParBassin, 1)} licences FFN par bassin.`,
-    },
-    {
-      score: licencesFfnPour100M2,
-      text: `Capacité sollicitée : ${formatNumber(licencesFfnPour100M2, 2)} licences FFN pour 100 m².`,
-    },
-    {
-      score: licencesFfnPour1000Hab,
-      text: `Taux de pratique notable : ${formatNumber(licencesFfnPour1000Hab, 2)} licences FFN pour 1 000 habitants.`,
-    },
-    {
-      score: communesSansBassinVolume,
-      text: `${formatInteger(communesSansBassinVolume)} communes avec licences restent sans bassin recensé.`,
-    },
-    {
-      score: communesSansBassinShare * 100,
-      text: `${formatPercent(communesSansBassinShare)} des communes licenciées restent sans bassin.`,
-    },
-    {
-      score: qpvPopulation,
-      text: `Enjeu social important : ${formatInteger(qpvPopulation)} habitants en QPV.`,
-    },
-    {
-      score: qpvShare * 100,
-      text: `Poids social marqué : ${formatPercent(qpvShare)} de la population en QPV.`,
-    },
-    {
-      score: population,
-      text: `Masse critique élevée : ${formatInteger(population)} habitants concernés.`,
-    },
-    {
-      score: licences,
-      text: `Volume important : ${formatInteger(licences)} licences FFN sur le territoire.`,
-    },
-    {
-      score: bassinsPour100kHab === 0 ? 999 : 100 / bassinsPour100kHab,
-      text: `Densité de bassin limitée : ${formatNumber(bassinsPour100kHab, 2)} bassins pour 100 000 habitants.`,
-    },
-  ];
-
-  return reasons
-    .sort((left, right) => right.score - left.score)
-    .slice(0, 4)
-    .map((item) => item.text);
-}
-
-function getQuadrantBucket(offerGapIndex: number, pressureIndex: number) {
-  const offerGapScore = offerGapIndex * 100;
-  const pressureScore = pressureIndex * 100;
-
-  if (offerGapScore >= QUADRANT_THRESHOLD && pressureScore >= QUADRANT_THRESHOLD) {
-    return "critical";
-  }
-  if (offerGapScore >= QUADRANT_THRESHOLD) {
-    return "offer_gap";
-  }
-  if (pressureScore >= QUADRANT_THRESHOLD) {
-    return "pressure";
-  }
-  return "stable";
-}
-
-function getQuadrantColor(item: Pick<InvestigationProfileRow, "offerGapIndex" | "pressureIndex" | "impactIndex">) {
-  const bucket = getQuadrantBucket(item.offerGapIndex, item.pressureIndex);
-
-  if (bucket === "critical") {
-    return "#ff8f5c";
-  }
-  if (bucket === "offer_gap") {
-    return "#f2c14e";
-  }
-  if (bucket === "pressure") {
-    return "#0f7c82";
-  }
-  return "#7aa4be";
-}
-
-function getInvestigationScoreByLens(item: InvestigationProfileRow, lens: InvestigationLens) {
-  if (lens === "offer_gap") {
-    return item.offerGapIndex * 100;
-  }
-  if (lens === "pressure") {
-    return item.pressureIndex * 100;
-  }
-  if (lens === "impact") {
-    return item.impactIndex * 100;
-  }
-  return item.priorityScore;
-}
-
-function getInvestigationContribution(score: number, lens: InvestigationComponentLens) {
-  return score * INVESTIGATION_PRIORITY_WEIGHTS[lens];
 }
 
 function toRawRows<T extends object>(rows: T[]) {
@@ -3251,6 +5594,20 @@ function formatNumber(value: number, digits: number) {
   }).format(value);
 }
 
+function formatSignedInteger(value: number) {
+  if (value === 0) {
+    return "0";
+  }
+  return `${value > 0 ? "+" : "-"}${formatInteger(Math.abs(value))}`;
+}
+
+function formatSignedNumber(value: number, digits: number) {
+  if (value === 0) {
+    return formatNumber(0, digits);
+  }
+  return `${value > 0 ? "+" : "-"}${formatNumber(Math.abs(value), digits)}`;
+}
+
 function formatMetricByKind(value: number, kind: MetricKind) {
   if (kind === "percent") {
     return formatPercent(value);
@@ -3261,11 +5618,45 @@ function formatMetricByKind(value: number, kind: MetricKind) {
   return formatNumber(value, 2);
 }
 
+function formatSignedPercent(value: number) {
+  if (value === 0) {
+    return formatPercent(0);
+  }
+  return `${value > 0 ? "+" : "-"}${formatPercent(Math.abs(value))}`;
+}
+
+function formatSignedMetricByKind(value: number, kind: MetricKind) {
+  if (kind === "percent") {
+    return formatSignedPercent(value);
+  }
+  if (kind === "count") {
+    return formatSignedInteger(value);
+  }
+  return formatSignedNumber(value, 2);
+}
+
 function formatOptionalMetric(value: number | null, kind: MetricKind) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) {
     return "n.c.";
   }
   return formatMetricByKind(Number(value), kind);
+}
+
+function formatOptionalMeasure(value: number, suffix: string, digits = 1) {
+  if (!Number.isFinite(value) || value <= 0) {
+    return "n.c.";
+  }
+  return `${formatNumber(value, digits)} ${suffix}`;
+}
+
+function getDeltaArrow(value: number) {
+  if (value > 0) {
+    return "↑";
+  }
+  if (value < 0) {
+    return "↓";
+  }
+  return "→";
 }
 
 function formatIndexScore(value: number) {
@@ -3281,26 +5672,6 @@ function formatRankPosition(rank: number | undefined, total: number) {
     return "Rang n.c.";
   }
   return `#${formatInteger(rank)} / ${formatInteger(total)}`;
-}
-
-function getPriorityToneClass(score: number) {
-  if (score >= 70) {
-    return "priority-high";
-  }
-  if (score >= 58) {
-    return "priority-medium";
-  }
-  return "priority-low";
-}
-
-function getPriorityLabel(score: number) {
-  if (score >= 70) {
-    return "Très prioritaire";
-  }
-  if (score >= 58) {
-    return "À investiguer";
-  }
-  return "Repère";
 }
 
 function getProfileToneClass(profile: string) {

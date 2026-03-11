@@ -99,14 +99,18 @@ export interface BasinRecord {
   departement: string;
   epci_code: string;
   epci_nom: string;
+  type_equipement: string;
   categorie: string;
   mode_gestion_calcule: string;
   surface_bassin_m2: number | null;
   longueur_m: number | null;
   largeur_m: number | null;
+  profondeur_min_m: number | null;
+  profondeur_max_m: number | null;
   nb_couloirs: number | null;
   usage_scolaires: number;
   site_scolaire_explicit: number;
+  particularite_installation: string | null;
   qpv_flag: number;
   qpv_200m_flag: number;
   longitude: number;
@@ -157,6 +161,48 @@ export interface Overview {
   communes_avec_licences_sans_bassin: number;
 }
 
+export interface ExtendedInventoryOverview {
+  equipments_total: number;
+  installations_total: number;
+  bassin_family_equipments_total: number;
+  bassin_family_installations_total: number;
+  non_bassin_family_equipments_total: number;
+  non_bassin_family_installations_total: number;
+  families_total: number;
+  types_total: number;
+  activities_total: number;
+}
+
+export interface ExtendedInventoryRecord {
+  id_equipement: string;
+  id_installation: string;
+  installation: string;
+  equipement: string;
+  code_commune: string;
+  commune: string;
+  epci_code: string | null;
+  epci_nom: string | null;
+  dep_code: string | null;
+  departement: string | null;
+  typologie_commune_source: string | null;
+  particularite_installation: string | null;
+  particularite_installation_brute: string | null;
+  famille_equipement: string;
+  type_equipement: string;
+  code_type_equipement: string | null;
+  rnb_id: string | null;
+  type_utilisation: string | null;
+  longueur_m: number | null;
+  largeur_m: number | null;
+  surface_bassin_m2: number | null;
+  profondeur_min_m: number | null;
+  profondeur_max_m: number | null;
+  nb_couloirs: number | null;
+  longitude: number | null;
+  latitude: number | null;
+  activites: string | null;
+}
+
 export interface DashboardData {
   meta: {
     title: string;
@@ -179,5 +225,7 @@ export interface DashboardData {
   age_sex: AgeSexRecord[];
   sex_2024: SexRecord[];
   sources: SourceEntry[];
+  extended_inventory_overview: ExtendedInventoryOverview;
+  extended_inventory: ExtendedInventoryRecord[];
   downloads: Array<{ label: string; path: string }>;
 }

@@ -3,7 +3,7 @@ Licences par commune (wide),data.sports.gouv.fr export utilisateur,commune / EPC
 Licences département,data.sports.gouv.fr export utilisateur,département,2024,fédération 119 + région 32,"licences FFN 2024, IS, rang"
 Licences département sexe,data.sports.gouv.fr export utilisateur,département,2024,fédération 119 + région 32,part des femmes FFN
 Licences département âge sexe,data.sports.gouv.fr export utilisateur,département x âge x sexe,2024,fédération 119 + région 32,distribution d’âge et intensité par âge/sexe
-Indicateurs clés fédération,data.sports.gouv.fr export utilisateur,France / fédération,2024/2023,fédération 119,benchmark national FFN
+Indicateurs clés fédération,data.sports.gouv.fr export utilisateur,France / fédération,2024/2023,fédération 119,repère national FFN
 Data ES export HDF,data.es / data.sports.gouv.fr export utilisateur,équipement / installation / commune / EPCI,export 06/03/2026,famille retenue: Bassin de natation,"bassins, gestion DSP, scolaires, QPV"
 QPV,ANCT / data.gouv.fr export utilisateur,quartier / commune / EPCI,stock fourni,région code 32,nombre de QPV et population QPV par commune
 Définition DSP,traitement DRAJES à partir de données publiques croisées,bassin,version web,Gestion en DSP = True dans Data ES,comptage des bassins en DSP
