@@ -1,0 +1,2 @@
+﻿communes_total,communes_routed_total,population_total,population_routed_total,installations_total,reachable_installations_total,average_drive_time_to_installation_min,average_drive_distance_to_installation_km,population_within_10min_share,population_within_15min_share,population_within_20min_share,communes_within_10min_share,communes_within_15min_share,communes_within_20min_share
+3788,3782,5998916,5995902,143,141,9.481188,6.596916,0.622909,0.810477,0.918999,0.225278,0.516393,0.741671

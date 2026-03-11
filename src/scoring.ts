@@ -293,15 +293,15 @@ export function getQuadrantColor(
   const bucket = getQuadrantBucket(item.offerGapIndex, item.pressureIndex);
 
   if (bucket === "critical") {
-    return "#ff8f5c";
+    return "#b34000";
   }
   if (bucket === "offer_gap") {
-    return "#f2c14e";
+    return "#c3992a";
   }
   if (bucket === "pressure") {
-    return "#0f7c82";
+    return "#000091";
   }
-  return "#7aa4be";
+  return "#6a6af4";
 }
 
 export function getInvestigationScoreByLens(

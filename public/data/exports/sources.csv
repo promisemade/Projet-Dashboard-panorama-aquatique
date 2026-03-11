@@ -10,3 +10,8 @@ Définition DSP,traitement DRAJES à partir de données publiques croisées,bass
 Définition régie,traitement DRAJES à partir de données publiques croisées,bassin,version web,Gestion en DSP = False et type gestionnaire public (Commune/EPCI/Département/Etablissement Public),proxy de la régie publique
 Définition scolaire usage,traitement DRAJES à partir de données publiques croisées,bassin,version web,"Type d’utilisation contient Scolaires, universités",bassin utilisé par les scolaires
 Définition scolaire explicite,traitement DRAJES à partir de données publiques croisées,bassin,version web,Type de particularité contient Etablissement scolaire ou UAI renseignée,"site scolaire explicite, beaucoup plus restrictif"
+12 Établissements scolaires géolocalisés,Ministère de l'Éducation nationale · data.education.gouv.fr,établissement,2024,Hauts-de-France · établissements ouverts,"ancrage géographique des écoles, collèges et lycées"
+13 Effectifs scolaires 2024,Ministère de l'Éducation nationale · data.education.gouv.fr,établissement,2024,Hauts-de-France · premier et second degrés,"pression scolaire potentielle, distance aux bassins et lecture territoriale"
+14 Centres communaux,geo.api.gouv.fr,commune,API temps reel,Hauts-de-France,points d'origine pour les calculs d'accessibilite voiture
+15 Temps d'acces voiture,OpenStreetMap / OSRM,commune -> installation,calcul au fil de l'eau,Installation aquatique la plus proche,lecture d'accessibilite voiture par commune et par EPCI
+16 GTFS transports collectifs,transport.data.gouv.fr,arrêt / gare / service,API temps réel,TER + réseaux interurbains Hauts-de-France,"offre TC potentielle autour des communes, des installations et des établissements"

@@ -34,14 +34,24 @@ import {
   type InvestigationScoreDefinition,
 } from "./scoring";
 import type {
+  AccessibilityEpciRecord,
+  AccessibilityOverview,
   AgeSexRecord,
   BasinRecord,
+  CommuneTransitRecord,
+  CommuneAccessibilityRecord,
   CommuneRecord,
   DashboardData,
   EpciRecord,
   ExtendedInventoryRecord,
   GenericRecord,
+  InstallationTransitRecord,
   Overview,
+  SchoolDemandInstallationRecord,
+  SchoolDemandOverview,
+  SchoolEstablishmentRecord,
+  TransitEpciRecord,
+  TransitOverview,
 } from "./types";
 
 type MetricKey =
@@ -67,12 +77,20 @@ type RawSheetKey =
   | "age_sex"
   | "sex_2024"
   | "sources"
-  | "extended_inventory";
+  | "extended_inventory"
+  | "school_establishments"
+  | "school_demand_epci"
+  | "school_demand_installations"
+  | "commune_accessibility"
+  | "accessibility_epci"
+  | "commune_transit"
+  | "transit_epci"
+  | "installation_transit";
 
 type DashboardTab = "overview" | "territories" | "facilities" | "licences" | "data";
-type OverviewView = "panorama" | "social";
+type OverviewView = "panorama" | "social" | "operations" | "school" | "access" | "transit";
 type TerritoriesView = "investigation" | "comparisons" | "territory";
-type FacilitiesView = "map" | "scope" | "physical" | "inventory" | "territories";
+type FacilitiesView = "map" | "sheet" | "scope" | "physical" | "operations" | "inventory" | "territories";
 
 interface RawSheetDefinition {
   key: RawSheetKey;
@@ -88,7 +106,7 @@ interface PreparedRawSheet extends RawSheetDefinition {
   downloadPath?: string;
 }
 
-type MetricKind = "count" | "ratio" | "percent";
+type MetricKind = "count" | "ratio" | "percent" | "duration" | "distance";
 type InventoryCountMode = "equipments" | "installations";
 
 interface MetricOption {
@@ -128,6 +146,75 @@ interface InventoryTypedRecord extends InventoryCountableRecord {
 
 interface InventoryActivityRecord extends InventoryCountableRecord {
   activites: string | null | undefined;
+}
+
+type OperationalBasinRecord = BasinRecord &
+  Pick<
+    ExtendedInventoryRecord,
+    | "uai"
+    | "handicap_access_types"
+    | "transport_access_modes"
+    | "opening_authorized_flag"
+    | "year_service"
+    | "last_major_works_year"
+    | "energy_sources"
+    | "pmr_access_detail"
+    | "sensory_access_detail"
+    | "seasonal_only_flag"
+    | "installation_out_of_service_flag"
+  >;
+
+interface OperationalInventorySummary {
+  equipmentCount: number;
+  installationCount: number;
+  averageServiceYear: number;
+  yearCoverageShare: number;
+  legacyShare: number;
+  recentWorksShare: number;
+  transportAccessShare: number;
+  accessibilityShare: number;
+  openingAuthorizedShare: number;
+  seasonalShare: number;
+  outOfServiceShare: number;
+  schoolUsageCount: number;
+  schoolUsageShare: number;
+  schoolExplicitCount: number;
+  uaiCount: number;
+  schoolTransportShare: number;
+  schoolAccessibilityShare: number;
+  schoolOperationalShare: number;
+}
+
+interface OperationalTerritoryRow {
+  epci_code: string;
+  epci_nom: string;
+  departement: string;
+  basins: number;
+  installations: number;
+  averageServiceYear: number;
+  legacyShare: number;
+  recentWorksShare: number;
+  transportAccessShare: number;
+  accessibilityShare: number;
+  schoolUsageCount: number;
+  schoolOperationalShare: number;
+}
+
+interface FacilityAssignedSchoolRow {
+  uai: string;
+  schoolName: string;
+  schoolLevel: string;
+  commune: string;
+  studentsTotal: number;
+  distanceToInstallationKm: number | null;
+  driveDistanceToInstallationKm: number | null;
+  driveTimeToInstallationMin: number | null;
+}
+
+interface AccessibilityHighlightRow {
+  label: string;
+  detail: string;
+  value: string;
 }
 
 type ComparableProfileScope =
@@ -173,6 +260,15 @@ interface QpvFragilityRow {
   directCoveragePer100kQpv: number;
   fragilityScore: number;
 }
+
+const LEGACY_SERVICE_YEAR_THRESHOLD = 2000;
+const RECENT_WORKS_YEAR_THRESHOLD = 2015;
+const SERVICE_YEAR_BUCKETS = [
+  { label: "Avant 1980", min: -Infinity, max: 1980 },
+  { label: "1980-1999", min: 1980, max: 2000 },
+  { label: "2000-2014", min: 2000, max: 2015 },
+  { label: "2015 et plus", min: 2015, max: Infinity },
+] as const;
 
 interface InvestigationProfileRow {
   epci_code: string;
@@ -357,6 +453,78 @@ const RAW_SHEET_DEFINITIONS: RawSheetDefinition[] = [
     exportSlug: "equipements_sportifs_non_filtres",
     getRows: (data) => toRawRows(data.extended_inventory),
   },
+  {
+    key: "school_establishments",
+    label: "13 Établissements scolaires",
+    sheetName: "Extraction Éducation",
+    description:
+      "Établissements scolaires géolocalisés en Hauts-de-France avec effectifs 2024 et distance au bassin le plus proche.",
+    exportSlug: "etablissements_scolaires_hdf",
+    getRows: (data) => toRawRows(data.school_establishments),
+  },
+  {
+    key: "school_demand_epci",
+    label: "14 Pression scolaire EPCI",
+    sheetName: "Synthèse scolaire EPCI",
+    description:
+      "Lecture territoriale de la demande scolaire potentielle : effectifs, couverture bassin et distance d'accès.",
+    exportSlug: "pression_scolaire_epci",
+    getRows: (data) => toRawRows(data.school_demand_epci),
+  },
+  {
+    key: "school_demand_installations",
+    label: "15 Pression scolaire installations",
+    sheetName: "Synthèse scolaire installations",
+    description:
+      "Rattachement des établissements scolaires à l'installation aquatique la plus proche dans le socle bassin retenu.",
+    exportSlug: "pression_scolaire_installations",
+    getRows: (data) => toRawRows(data.school_demand_installations),
+  },
+  {
+    key: "commune_accessibility",
+    label: "16 Accessibilité voiture communes",
+    sheetName: "Accessibilité voiture communes",
+    description:
+      "Temps d'acces voiture depuis le centre communal vers l'installation aquatique la plus proche du socle regional.",
+    exportSlug: "accessibilite_voiture_communes",
+    getRows: (data) => toRawRows(data.commune_accessibility),
+  },
+  {
+    key: "accessibility_epci",
+    label: "17 Accessibilité voiture EPCI",
+    sheetName: "Synthèse accessibilité EPCI",
+    description:
+      "Lecture agrégée des temps d'accès voiture par EPCI : temps moyen, distance moyenne et parts de population couvertes.",
+    exportSlug: "accessibilite_voiture_epci",
+    getRows: (data) => toRawRows(data.accessibility_epci),
+  },
+  {
+    key: "commune_transit",
+    label: "18 Offre TC potentielle communes",
+    sheetName: "Offre TC potentielle communes",
+    description:
+      "Lecture GTFS des communes : distance à l'arrêt ou à la gare la plus proche et volume théorique de passages à proximité.",
+    exportSlug: "offre_tc_potentielle_communes",
+    getRows: (data) => toRawRows(data.commune_transit),
+  },
+  {
+    key: "transit_epci",
+    label: "19 Offre TC potentielle EPCI",
+    sheetName: "Synthèse offre TC EPCI",
+    description:
+      "Lecture agrégée par EPCI de l'offre TC potentielle autour des communes, des installations et des établissements scolaires.",
+    exportSlug: "offre_tc_potentielle_epci",
+    getRows: (data) => toRawRows(data.transit_epci),
+  },
+  {
+    key: "installation_transit",
+    label: "20 Offre TC potentielle installations",
+    sheetName: "Synthèse offre TC installations",
+    description:
+      "Ancrage GTFS des installations aquatiques : distance à l'arrêt le plus proche et intensité théorique de desserte à pied.",
+    exportSlug: "offre_tc_potentielle_installations",
+    getRows: (data) => toRawRows(data.installation_transit),
+  },
 ];
 
 const AGE_ORDER = [
@@ -381,9 +549,9 @@ const AGE_ORDER = [
 ];
 
 const MANAGEMENT_COLORS: Record<string, string> = {
-  DSP: "#ff8f5c",
-  "Régie publique": "#0f7c82",
-  "Autre gestion hors DSP": "#1f4e70",
+  DSP: "#b34000",
+  "Régie publique": "#000091",
+  "Autre gestion hors DSP": "#6a6af4",
 };
 
 const CORE_AQUATIC_TYPES = new Set([
@@ -404,6 +572,67 @@ const LENGTH_BUCKETS = [
   { label: "25 à 49 m", min: 25, max: 50 },
   { label: "50 m et +", min: 50, max: Number.POSITIVE_INFINITY },
 ] as const;
+const EMPTY_SCHOOL_DEMAND_SUMMARY: SchoolDemandOverview = {
+  schools_total: 0,
+  schools_geolocated_total: 0,
+  students_total: 0,
+  students_geolocated_total: 0,
+  primary_students: 0,
+  secondary_students: 0,
+  distance_coverage_share: 0,
+  drive_time_coverage_share: 0,
+  average_distance_to_installation_km: 0,
+  average_drive_time_to_installation_min: 0,
+  average_drive_distance_to_installation_km: 0,
+  average_distance_to_basin_km: 0,
+  students_within_5km_installation_share: 0,
+  students_within_15min_installation_share: 0,
+  basins_total: 0,
+  installations_total: 0,
+  school_basins_total: 0,
+  students_per_basin: 0,
+  students_per_installation: 0,
+  students_per_school_basin: 0,
+};
+const EMPTY_ACCESSIBILITY_SUMMARY: AccessibilityOverview = {
+  communes_total: 0,
+  communes_routed_total: 0,
+  population_total: 0,
+  population_routed_total: 0,
+  installations_total: 0,
+  reachable_installations_total: 0,
+  average_drive_time_to_installation_min: 0,
+  average_drive_distance_to_installation_km: 0,
+  population_within_10min_share: 0,
+  population_within_15min_share: 0,
+  population_within_20min_share: 0,
+  communes_within_10min_share: 0,
+  communes_within_15min_share: 0,
+  communes_within_20min_share: 0,
+};
+const EMPTY_TRANSIT_SUMMARY: TransitOverview = {
+  communes_total: 0,
+  communes_geolocated_total: 0,
+  population_total: 0,
+  population_geolocated_total: 0,
+  transit_hubs_total: 0,
+  average_nearest_stop_distance_km: 0,
+  average_weekday_trips_within_1000m: 0,
+  population_within_500m_share: 0,
+  population_within_1000m_share: 0,
+  communes_within_500m_share: 0,
+  communes_within_1000m_share: 0,
+  installations_total: 0,
+  installations_geolocated_total: 0,
+  installations_within_500m_share: 0,
+  installations_within_1000m_share: 0,
+  schools_total: 0,
+  students_total: 0,
+  students_geolocated_total: 0,
+  average_school_nearest_stop_distance_km: 0,
+  students_within_500m_share: 0,
+  students_within_1000m_share: 0,
+};
 const RAW_PAGE_SIZE = 20;
 const INVESTIGATION_PAGE_SIZE = 10;
 const RANKING_LIMIT_OPTIONS = [12, 25, 50, 100] as const;
@@ -574,6 +803,26 @@ const OVERVIEW_VIEW_OPTIONS: Array<{
     label: "Enjeux sociaux",
     description: "Lecture QPV du p\u00e9rim\u00e8tre actif et fragilit\u00e9 sociale par EPCI.",
   },
+  {
+    key: "operations",
+    label: "État du parc",
+    description: "Lecture courte de l'exploitation, du vieillissement du parc et des fragilités structurelles par EPCI.",
+  },
+  {
+    key: "school",
+    label: "Demande scolaire",
+    description: "Pression scolaire potentielle, distances d'accès et lecture des effectifs par EPCI.",
+  },
+  {
+    key: "access",
+    label: "Accès voiture",
+    description: "Temps d'accès routier vers l'installation aquatique la plus proche, à la maille communale puis EPCI.",
+  },
+  {
+    key: "transit",
+    label: "Offre TC",
+    description: "Lecture GTFS d'offre potentielle : arrêts, gares et intensité théorique de desserte à proximité.",
+  },
 ];
 const TERRITORIES_VIEW_OPTIONS: Array<{
   key: TerritoriesView;
@@ -607,6 +856,11 @@ const FACILITIES_VIEW_OPTIONS: Array<{
     description: "Carte, filtres actifs et répartition immédiate du parc affiché.",
   },
   {
+    key: "sheet",
+    label: "Fiche équipement",
+    description: "Lecture fine d'un bassin, de ses dimensions, de son exploitation et du site qui l'accueille.",
+  },
+  {
     key: "scope",
     label: "Périmètre",
     description: "Socle bassins, lecture Data ES élargie et repères de couverture.",
@@ -615,6 +869,11 @@ const FACILITIES_VIEW_OPTIONS: Array<{
     key: "physical",
     label: "Propriétés",
     description: "Tailles, longueurs, couloirs et intensité physique du parc.",
+  },
+  {
+    key: "operations",
+    label: "État & scolaire",
+    description: "Ancienneté, travaux, énergie, accessibilité et conditions d'accueil scolaire.",
   },
   {
     key: "inventory",
@@ -635,6 +894,7 @@ function App() {
   const [overviewView, setOverviewView] = useState<OverviewView>("panorama");
   const [territoriesView, setTerritoriesView] = useState<TerritoriesView>("investigation");
   const [facilitiesView, setFacilitiesView] = useState<FacilitiesView>("map");
+  const [selectedFacilityEquipmentId, setSelectedFacilityEquipmentId] = useState("");
   const [selectedDepartment, setSelectedDepartment] = useState("all");
   const [selectedEpciCode, setSelectedEpciCode] = useState("all");
   const [selectedComparisonEpciCode, setSelectedComparisonEpciCode] = useState("all");
@@ -690,6 +950,34 @@ function App() {
           sex_2024: Array.isArray(payload.sex_2024) ? payload.sex_2024 : [],
           sources: Array.isArray(payload.sources) ? payload.sources : [],
           extended_inventory: Array.isArray(payload.extended_inventory) ? payload.extended_inventory : [],
+          school_establishments: Array.isArray(payload.school_establishments)
+            ? payload.school_establishments
+            : [],
+          school_demand_epci: Array.isArray(payload.school_demand_epci) ? payload.school_demand_epci : [],
+          school_demand_installations: Array.isArray(payload.school_demand_installations)
+            ? payload.school_demand_installations
+            : [],
+          commune_accessibility: Array.isArray(payload.commune_accessibility)
+            ? payload.commune_accessibility
+            : [],
+          accessibility_epci: Array.isArray(payload.accessibility_epci) ? payload.accessibility_epci : [],
+          commune_transit: Array.isArray(payload.commune_transit) ? payload.commune_transit : [],
+          transit_epci: Array.isArray(payload.transit_epci) ? payload.transit_epci : [],
+          installation_transit: Array.isArray(payload.installation_transit)
+            ? payload.installation_transit
+            : [],
+          school_demand_overview:
+            payload.school_demand_overview && typeof payload.school_demand_overview === "object"
+              ? payload.school_demand_overview
+              : EMPTY_SCHOOL_DEMAND_SUMMARY,
+          accessibility_overview:
+            payload.accessibility_overview && typeof payload.accessibility_overview === "object"
+              ? payload.accessibility_overview
+              : EMPTY_ACCESSIBILITY_SUMMARY,
+          transit_overview:
+            payload.transit_overview && typeof payload.transit_overview === "object"
+              ? payload.transit_overview
+              : EMPTY_TRANSIT_SUMMARY,
           downloads: Array.isArray(payload.downloads) ? payload.downloads : [],
         } as DashboardData;
         setData(normalizedPayload);
@@ -853,6 +1141,425 @@ function App() {
       });
   }, [communeTypologyLookup, deferredBasinSearch, localityTypeFilter, scopedExtendedInventory]);
 
+  const operationalInventoryByEquipmentId = useMemo(() => {
+    const map = new Map<string, ExtendedInventoryRecord>();
+    scopedExtendedInventory
+      .filter((item) => item.famille_equipement === "Bassin de natation")
+      .forEach((item) => {
+        map.set(item.id_equipement, item);
+      });
+    return map;
+  }, [scopedExtendedInventory]);
+
+  const filteredOperationalBasins = useMemo<OperationalBasinRecord[]>(
+    () =>
+      filteredBasins.map((item) => {
+        const extra = operationalInventoryByEquipmentId.get(item.id_equipement);
+        return {
+          ...item,
+          uai: extra?.uai ?? null,
+          handicap_access_types: extra?.handicap_access_types ?? null,
+          transport_access_modes: extra?.transport_access_modes ?? null,
+          opening_authorized_flag: extra?.opening_authorized_flag ?? 0,
+          year_service: extra?.year_service ?? null,
+          last_major_works_year: extra?.last_major_works_year ?? null,
+          energy_sources: extra?.energy_sources ?? null,
+          pmr_access_detail: extra?.pmr_access_detail ?? null,
+          sensory_access_detail: extra?.sensory_access_detail ?? null,
+          seasonal_only_flag: extra?.seasonal_only_flag ?? 0,
+          installation_out_of_service_flag: extra?.installation_out_of_service_flag ?? 0,
+        };
+      }),
+    [filteredBasins, operationalInventoryByEquipmentId],
+  );
+
+  const scopedOperationalBasins = useMemo<OperationalBasinRecord[]>(
+    () =>
+      scopedBasins.map((item) => {
+        const extra = operationalInventoryByEquipmentId.get(item.id_equipement);
+        return {
+          ...item,
+          uai: extra?.uai ?? null,
+          handicap_access_types: extra?.handicap_access_types ?? null,
+          transport_access_modes: extra?.transport_access_modes ?? null,
+          opening_authorized_flag: extra?.opening_authorized_flag ?? 0,
+          year_service: extra?.year_service ?? null,
+          last_major_works_year: extra?.last_major_works_year ?? null,
+          energy_sources: extra?.energy_sources ?? null,
+          pmr_access_detail: extra?.pmr_access_detail ?? null,
+          sensory_access_detail: extra?.sensory_access_detail ?? null,
+          seasonal_only_flag: extra?.seasonal_only_flag ?? 0,
+          installation_out_of_service_flag: extra?.installation_out_of_service_flag ?? 0,
+        };
+      }),
+    [operationalInventoryByEquipmentId, scopedBasins],
+  );
+
+  const facilitySheetOptions = useMemo(() => {
+    return [...filteredBasins]
+      .sort((left, right) => {
+        const installationCompare = left.installation.localeCompare(right.installation, "fr");
+        if (installationCompare !== 0) {
+          return installationCompare;
+        }
+        const equipmentCompare = left.equipement.localeCompare(right.equipement, "fr");
+        if (equipmentCompare !== 0) {
+          return equipmentCompare;
+        }
+        return left.commune.localeCompare(right.commune, "fr");
+      })
+      .map((item) => ({
+        id: item.id_equipement,
+        label: `${item.installation} - ${item.equipement}`,
+        meta: `${item.commune} - ${shortDepartment(item.departement)}`,
+      }));
+  }, [filteredBasins]);
+
+  useEffect(() => {
+    if (facilitySheetOptions.length === 0) {
+      if (selectedFacilityEquipmentId !== "") {
+        setSelectedFacilityEquipmentId("");
+      }
+      return;
+    }
+
+    const hasSelectedOption = facilitySheetOptions.some((item) => item.id === selectedFacilityEquipmentId);
+    if (!hasSelectedOption) {
+      setSelectedFacilityEquipmentId(facilitySheetOptions[0]?.id ?? "");
+    }
+  }, [facilitySheetOptions, selectedFacilityEquipmentId]);
+
+  const selectedFacilityBasin = useMemo(() => {
+    if (filteredBasins.length === 0) {
+      return null;
+    }
+
+    return filteredBasins.find((item) => item.id_equipement === selectedFacilityEquipmentId) ?? filteredBasins[0];
+  }, [filteredBasins, selectedFacilityEquipmentId]);
+
+  const selectedFacilityOperational = useMemo(() => {
+    if (!selectedFacilityBasin) {
+      return null;
+    }
+
+    return (
+      filteredOperationalBasins.find((item) => item.id_equipement === selectedFacilityBasin.id_equipement) ?? null
+    );
+  }, [filteredOperationalBasins, selectedFacilityBasin]);
+
+  const selectedFacilityInstallationInventory = useMemo(() => {
+    if (!selectedFacilityBasin) {
+      return [];
+    }
+
+    return scopedExtendedInventory
+      .filter((item) => item.id_installation === selectedFacilityBasin.id_installation)
+      .sort((left, right) => {
+        const familyCompare = left.famille_equipement.localeCompare(right.famille_equipement, "fr");
+        if (familyCompare !== 0) {
+          return familyCompare;
+        }
+        const typeCompare = left.type_equipement.localeCompare(right.type_equipement, "fr");
+        if (typeCompare !== 0) {
+          return typeCompare;
+        }
+        return left.equipement.localeCompare(right.equipement, "fr");
+      });
+  }, [scopedExtendedInventory, selectedFacilityBasin]);
+
+  const selectedFacilitySiteSummary = useMemo(
+    () => buildExtendedInventorySummary(selectedFacilityInstallationInventory),
+    [selectedFacilityInstallationInventory],
+  );
+
+  const selectedFacilityFamilyRows = useMemo(
+    () => buildExtendedInventoryFamilyBreakdownRows(selectedFacilityInstallationInventory, "equipments"),
+    [selectedFacilityInstallationInventory],
+  );
+
+  const selectedFacilityTypeRows = useMemo(
+    () => buildInventoryTypeBreakdownRows(selectedFacilityInstallationInventory, "equipments"),
+    [selectedFacilityInstallationInventory],
+  );
+
+  const selectedFacilityActivityRows = useMemo(
+    () => buildInventoryActivityRows(selectedFacilityInstallationInventory, "equipments"),
+    [selectedFacilityInstallationInventory],
+  );
+
+  const selectedFacilitySiteRows = useMemo(() => {
+    return selectedFacilityInstallationInventory.map((item) => ({
+      id: item.id_equipement,
+      equipement: item.equipement,
+      family: item.famille_equipement,
+      type: item.type_equipement,
+      dimensions: formatInventoryDimensions(item),
+      activities: splitPipeSeparatedValues(item.activites).slice(0, 3).join(" - ") || "n.c.",
+    }));
+  }, [selectedFacilityInstallationInventory]);
+
+  const selectedFacilityComparablePeers = useMemo(() => {
+    if (!selectedFacilityBasin) {
+      return [];
+    }
+
+    const profile = getDetailedComparableBasinProfile(selectedFacilityBasin);
+
+    return filteredBasins
+      .filter((item) => item.id_equipement !== selectedFacilityBasin.id_equipement)
+      .filter((item) => getDetailedComparableBasinProfile(item) === profile)
+      .sort((left, right) => {
+        const surfaceCompare = (right.surface_bassin_m2 ?? -1) - (left.surface_bassin_m2 ?? -1);
+        if (surfaceCompare !== 0) {
+          return surfaceCompare;
+        }
+        const lengthCompare = (right.longueur_m ?? -1) - (left.longueur_m ?? -1);
+        if (lengthCompare !== 0) {
+          return lengthCompare;
+        }
+        return left.installation.localeCompare(right.installation, "fr");
+      })
+      .slice(0, 8);
+  }, [filteredBasins, selectedFacilityBasin]);
+
+  const selectedFacilityIdentityFacts = useMemo(() => {
+    if (!selectedFacilityBasin) {
+      return [];
+    }
+
+    const localityType = communeTypologyLookup.get(selectedFacilityBasin.code_commune) ?? "Non renseigné";
+    const qpvLabel =
+      selectedFacilityBasin.qpv_flag === 1
+        ? "En QPV"
+        : selectedFacilityBasin.qpv_200m_flag === 1
+          ? "À 200 m d'un QPV"
+          : "Hors QPV";
+
+    return [
+      {
+        label: "Installation",
+        value: selectedFacilityBasin.installation,
+        detail: `Site Data ES : ${formatInteger(selectedFacilitySiteSummary.equipmentsTotal)} équipements recensés.`,
+      },
+      {
+        label: "Territoire",
+        value: `${selectedFacilityBasin.commune} - ${shortDepartment(selectedFacilityBasin.departement)}`,
+        detail: selectedFacilityBasin.epci_nom,
+      },
+      {
+        label: "Typologie communale",
+        value: localityType,
+        detail: "Lecture utile pour distinguer rural, périurbain et urbain.",
+      },
+      {
+        label: "Mode de gestion",
+        value: selectedFacilityBasin.mode_gestion_calcule,
+        detail: "Lecture du socle bassin retenu dans le dashboard.",
+      },
+      {
+        label: "Position QPV",
+        value: qpvLabel,
+        detail: "Signal de proximité sociale au niveau de l'équipement.",
+      },
+    ];
+  }, [communeTypologyLookup, selectedFacilityBasin, selectedFacilitySiteSummary.equipmentsTotal]);
+
+  const selectedFacilityDimensionFacts = useMemo(() => {
+    if (!selectedFacilityBasin) {
+      return [];
+    }
+
+    return [
+      {
+        label: "Profil comparable",
+        value: getDetailedComparableBasinProfile(selectedFacilityBasin),
+        detail: "Comparaison avec des bassins de même famille fonctionnelle.",
+      },
+      {
+        label: "Surface",
+        value: formatOptionalMeasure(selectedFacilityBasin.surface_bassin_m2 ?? 0, "m²", 0),
+        detail: "Surface renseignée sur la ligne équipement.",
+      },
+      {
+        label: "Longueur",
+        value: formatOptionalMeasure(selectedFacilityBasin.longueur_m ?? 0, "m", 0),
+        detail: "Format majeur pour distinguer bassin sportif, mixte ou ludique.",
+      },
+      {
+        label: "Couloirs",
+        value:
+          typeof selectedFacilityBasin.nb_couloirs === "number" && Number.isFinite(selectedFacilityBasin.nb_couloirs)
+            ? formatInteger(selectedFacilityBasin.nb_couloirs)
+            : "n.c.",
+        detail: "Capacité de nage lignée quand le champ est disponible.",
+      },
+      {
+        label: "Profondeur max",
+        value: formatOptionalMeasure(selectedFacilityBasin.profondeur_max_m ?? 0, "m", 1),
+        detail: "Particulièrement utile pour les fosses et bassins spécialisés.",
+      },
+    ];
+  }, [selectedFacilityBasin]);
+
+  const selectedFacilityOperationalFacts = useMemo(() => {
+    if (!selectedFacilityOperational) {
+      return [];
+    }
+
+    const energies = splitPipeSeparatedValues(selectedFacilityOperational.energy_sources).join(" - ") || "n.c.";
+    const transportModes =
+      splitPipeSeparatedValues(selectedFacilityOperational.transport_access_modes).join(" - ") || "n.c.";
+    const accessibilityLabel = hasAccessibilitySupport(selectedFacilityOperational)
+      ? "Renseignée"
+      : "Non renseignée";
+    const schoolLabel =
+      selectedFacilityOperational.usage_scolaires === 1
+        ? selectedFacilityOperational.site_scolaire_explicit === 1
+          ? "Usage scolaire explicite"
+          : "Usage scolaire repéré"
+        : "Pas de signal scolaire";
+
+    return [
+      {
+        label: "Mise en service",
+        value:
+          typeof selectedFacilityOperational.year_service === "number"
+            ? formatInteger(selectedFacilityOperational.year_service)
+            : "n.c.",
+        detail: "Permet de lire l'ancienneté du bassin.",
+      },
+      {
+        label: "Derniers gros travaux",
+        value:
+          typeof selectedFacilityOperational.last_major_works_year === "number"
+            ? formatInteger(selectedFacilityOperational.last_major_works_year)
+            : "n.c.",
+        detail: hasRecentWorks(selectedFacilityOperational)
+          ? "Signal de travaux récents dans Data ES."
+          : "Aucun repère récent dans le brut Data ES.",
+      },
+      {
+        label: "Énergie",
+        value: energies,
+        detail: "Source d'énergie déclarée sur l'équipement.",
+      },
+      {
+        label: "Transport",
+        value: transportModes,
+        detail: "Modes de transport collectif déclarés.",
+      },
+      {
+        label: "Accessibilité",
+        value: accessibilityLabel,
+        detail: selectedFacilityOperational.pmr_access_detail ?? selectedFacilityOperational.sensory_access_detail ?? "",
+      },
+      {
+        label: "Lecture scolaire",
+        value: schoolLabel,
+        detail:
+          selectedFacilityOperational.uai && selectedFacilityOperational.uai.trim().length > 0
+            ? `UAI ${selectedFacilityOperational.uai}`
+            : selectedFacilityOperational.opening_authorized_flag === 1
+              ? "Arrêté d'ouverture renseigné."
+              : "Pas d'UAI renseignée.",
+      },
+    ];
+  }, [selectedFacilityOperational]);
+
+  const selectedFacilitySignalPills = useMemo(() => {
+    if (!selectedFacilityBasin) {
+      return [];
+    }
+
+    const pills = [
+      selectedFacilityBasin.mode_gestion_calcule,
+      getDetailedComparableBasinProfile(selectedFacilityBasin),
+      communeTypologyLookup.get(selectedFacilityBasin.code_commune) ?? "Typologie non renseignée",
+      selectedFacilityBasin.usage_scolaires === 1 ? "Usage scolaire" : "Hors signal scolaire",
+      selectedFacilityBasin.qpv_flag === 1
+        ? "En QPV"
+        : selectedFacilityBasin.qpv_200m_flag === 1
+          ? "À 200 m QPV"
+          : "Hors QPV",
+    ];
+
+    if (selectedFacilityOperational) {
+      if (hasTransportAccess(selectedFacilityOperational)) {
+        pills.push("Transport renseigné");
+      }
+      if (hasAccessibilitySupport(selectedFacilityOperational)) {
+        pills.push("Accessibilité renseignée");
+      }
+      if (hasRecentWorks(selectedFacilityOperational)) {
+        pills.push("Travaux récents");
+      }
+    }
+
+    return pills;
+  }, [communeTypologyLookup, selectedFacilityBasin, selectedFacilityOperational]);
+
+  const selectedFacilityReadingMessages = useMemo(() => {
+    if (!selectedFacilityBasin) {
+      return [];
+    }
+
+    const operationalYear =
+      selectedFacilityOperational && typeof selectedFacilityOperational.year_service === "number"
+        ? formatInteger(selectedFacilityOperational.year_service)
+        : "n.c.";
+    const worksYear =
+      selectedFacilityOperational && typeof selectedFacilityOperational.last_major_works_year === "number"
+        ? formatInteger(selectedFacilityOperational.last_major_works_year)
+        : "n.c.";
+    const schoolLabel =
+      selectedFacilityBasin.usage_scolaires === 1
+        ? selectedFacilityBasin.site_scolaire_explicit === 1
+          ? "Usage scolaire explicite"
+          : "Usage scolaire repéré"
+        : "Pas de signal scolaire";
+    const qpvLabel =
+      selectedFacilityBasin.qpv_flag === 1
+        ? "Équipement en QPV"
+        : selectedFacilityBasin.qpv_200m_flag === 1
+          ? "Équipement à 200 m d'un QPV"
+          : "Hors proximité QPV";
+    const operationalConditions = selectedFacilityOperational
+      ? [
+          hasTransportAccess(selectedFacilityOperational) ? "transport" : null,
+          hasAccessibilitySupport(selectedFacilityOperational) ? "accessibilité" : null,
+          selectedFacilityOperational.opening_authorized_flag === 1 ? "ouverture" : null,
+        ].filter((item): item is string => item !== null)
+      : [];
+
+    return [
+      {
+        label: "Profil",
+        title: getDetailedComparableBasinProfile(selectedFacilityBasin),
+        detail: `${selectedFacilityBasin.type_equipement} · ${formatComparableBasinMetrics(selectedFacilityBasin)}`,
+      },
+      {
+        label: "Contexte",
+        title: schoolLabel,
+        detail: `${qpvLabel} · gestion ${selectedFacilityBasin.mode_gestion_calcule.toLowerCase()}`,
+      },
+      {
+        label: "Exploitation",
+        title: `Mise en service ${operationalYear}`,
+        detail:
+          worksYear !== "n.c."
+            ? `Derniers gros travaux ${worksYear} · ${operationalConditions.join(" + ") || "conditions partielles"}`
+            : `Derniers gros travaux n.c. · ${operationalConditions.join(" + ") || "conditions partielles"}`,
+      },
+      {
+        label: "Site",
+        title: `${formatInteger(selectedFacilitySiteSummary.equipmentsTotal)} équipements sur site`,
+        detail: `${formatInteger(selectedFacilitySiteSummary.nonBassinFamilyEquipmentsTotal)} hors bassin · ${formatInteger(
+          selectedFacilitySiteSummary.activitiesTotal,
+        )} activités recensées`,
+      },
+    ];
+  }, [selectedFacilityBasin, selectedFacilityOperational, selectedFacilitySiteSummary]);
+
   const comparableScopedBasins = useMemo(() => {
     return scopedBasins
       .filter(
@@ -934,6 +1641,320 @@ function App() {
       ).length,
     };
   }, [data, filteredCommunes, filteredDepartments, filteredSex, scopedEpci, selectedDepartment]);
+
+  const scopedSchoolEstablishments = useMemo(() => {
+    if (!data) {
+      return [];
+    }
+
+    return data.school_establishments.filter(
+      (item) => selectedDepartment === "all" || item.code_departement === selectedDepartment,
+    );
+  }, [data, selectedDepartment]);
+
+  const scopedSchoolDemandEpciRows = useMemo(() => {
+    if (!data) {
+      return [];
+    }
+
+    return data.school_demand_epci.filter(
+      (item) => selectedDepartment === "all" || item.code_departement === selectedDepartment,
+    );
+  }, [data, selectedDepartment]);
+
+  const scopedSchoolDemandInstallations = useMemo(() => {
+    if (!data) {
+      return [];
+    }
+
+    return data.school_demand_installations.filter(
+      (item) => selectedDepartment === "all" || item.code_departement === selectedDepartment,
+    );
+  }, [data, selectedDepartment]);
+
+  const schoolDemandEpciByCode = useMemo(
+    () => new Map(scopedSchoolDemandEpciRows.map((item) => [item.epci_code, item])),
+    [scopedSchoolDemandEpciRows],
+  );
+
+  const schoolDemandInstallationById = useMemo(
+    () => new Map(scopedSchoolDemandInstallations.map((item) => [item.id_installation, item])),
+    [scopedSchoolDemandInstallations],
+  );
+
+  const scopedCommuneAccessibility = useMemo(() => {
+    if (!data) {
+      return [];
+    }
+
+    return data.commune_accessibility.filter(
+      (item) => selectedDepartment === "all" || item.code_departement === selectedDepartment,
+    );
+  }, [data, selectedDepartment]);
+
+  const scopedAccessibilityEpciRows = useMemo(() => {
+    if (!data) {
+      return [];
+    }
+
+    return data.accessibility_epci.filter(
+      (item) => selectedDepartment === "all" || item.code_departement === selectedDepartment,
+    );
+  }, [data, selectedDepartment]);
+
+  const accessibilityEpciByCode = useMemo(
+    () => new Map(scopedAccessibilityEpciRows.map((item) => [item.epci_code, item])),
+    [scopedAccessibilityEpciRows],
+  );
+
+  const scopedCommuneTransit = useMemo(() => {
+    if (!data) {
+      return [];
+    }
+
+    return data.commune_transit.filter(
+      (item) => selectedDepartment === "all" || item.code_departement === selectedDepartment,
+    );
+  }, [data, selectedDepartment]);
+
+  const scopedTransitEpciRows = useMemo(() => {
+    if (!data) {
+      return [];
+    }
+
+    return data.transit_epci.filter(
+      (item) => selectedDepartment === "all" || item.code_departement === selectedDepartment,
+    );
+  }, [data, selectedDepartment]);
+
+  const scopedInstallationTransit = useMemo(() => {
+    if (!data) {
+      return [];
+    }
+
+    return data.installation_transit.filter(
+      (item) => selectedDepartment === "all" || item.code_departement === selectedDepartment,
+    );
+  }, [data, selectedDepartment]);
+
+  const transitEpciByCode = useMemo(
+    () => new Map(scopedTransitEpciRows.map((item) => [item.epci_code, item])),
+    [scopedTransitEpciRows],
+  );
+
+  const installationTransitById = useMemo(
+    () => new Map(scopedInstallationTransit.map((item) => [item.id_installation, item])),
+    [scopedInstallationTransit],
+  );
+
+  const overviewSchoolDemandSummary = useMemo<SchoolDemandOverview>(() => {
+    if (!data) {
+      return EMPTY_SCHOOL_DEMAND_SUMMARY;
+    }
+
+    if (selectedDepartment === "all") {
+      return data.school_demand_overview ?? EMPTY_SCHOOL_DEMAND_SUMMARY;
+    }
+
+    return buildSchoolDemandSummary(
+      scopedSchoolEstablishments,
+      scopedBasins.length,
+      countUnique(scopedBasins.map((item) => item.id_installation)),
+      scopedBasins.filter((item) => item.usage_scolaires === 1).length,
+    );
+  }, [data, scopedBasins, scopedSchoolEstablishments, selectedDepartment]);
+
+  const overviewAccessibilitySummary = useMemo<AccessibilityOverview>(() => {
+    if (!data) {
+      return EMPTY_ACCESSIBILITY_SUMMARY;
+    }
+
+    if (selectedDepartment === "all") {
+      return data.accessibility_overview ?? EMPTY_ACCESSIBILITY_SUMMARY;
+    }
+
+    return buildAccessibilitySummary(
+      scopedCommuneAccessibility,
+      data.accessibility_overview?.installations_total ?? countUnique(scopedBasins.map((item) => item.id_installation)),
+    );
+  }, [data, scopedBasins, scopedCommuneAccessibility, selectedDepartment]);
+
+  const overviewTransitSummary = useMemo<TransitOverview>(() => {
+    if (!data) {
+      return EMPTY_TRANSIT_SUMMARY;
+    }
+
+    if (selectedDepartment === "all") {
+      return data.transit_overview ?? EMPTY_TRANSIT_SUMMARY;
+    }
+
+    return buildTransitSummary(
+      scopedCommuneTransit,
+      scopedInstallationTransit,
+      scopedSchoolEstablishments,
+      data.transit_overview?.transit_hubs_total ?? 0,
+    );
+  }, [
+    data,
+    scopedCommuneTransit,
+    scopedInstallationTransit,
+    scopedSchoolEstablishments,
+    selectedDepartment,
+  ]);
+
+  const selectedFacilityInstallationSchoolDemand = useMemo<SchoolDemandInstallationRecord | null>(() => {
+    if (!selectedFacilityBasin) {
+      return null;
+    }
+
+    return schoolDemandInstallationById.get(selectedFacilityBasin.id_installation) ?? null;
+  }, [schoolDemandInstallationById, selectedFacilityBasin]);
+
+  const selectedFacilityTransit = useMemo<InstallationTransitRecord | null>(() => {
+    if (!selectedFacilityBasin) {
+      return null;
+    }
+
+    return installationTransitById.get(selectedFacilityBasin.id_installation) ?? null;
+  }, [installationTransitById, selectedFacilityBasin]);
+
+  const selectedFacilityAssignedSchools = useMemo<FacilityAssignedSchoolRow[]>(() => {
+    if (!selectedFacilityBasin) {
+      return [];
+    }
+
+    return scopedSchoolEstablishments
+      .filter((item) => item.nearest_installation_id === selectedFacilityBasin.id_installation)
+      .sort((left, right) => {
+        const studentGap = right.students_total - left.students_total;
+        if (studentGap !== 0) {
+          return studentGap;
+        }
+        const driveTimeGap =
+          (left.drive_time_to_nearest_installation_min ?? Number.POSITIVE_INFINITY) -
+          (right.drive_time_to_nearest_installation_min ?? Number.POSITIVE_INFINITY);
+        if (driveTimeGap !== 0) {
+          return driveTimeGap;
+        }
+        return left.school_name.localeCompare(right.school_name, "fr");
+      })
+      .slice(0, 10)
+      .map((item) => ({
+        uai: item.uai,
+        schoolName: item.school_name,
+        schoolLevel: item.school_level,
+        commune: item.commune ?? "Commune n.c.",
+        studentsTotal: item.students_total,
+        distanceToInstallationKm: item.distance_to_nearest_installation_km,
+        driveDistanceToInstallationKm: item.drive_distance_to_nearest_installation_km,
+        driveTimeToInstallationMin: item.drive_time_to_nearest_installation_min,
+      }));
+  }, [scopedSchoolEstablishments, selectedFacilityBasin]);
+
+  const selectedFacilitySchoolFacts = useMemo(() => {
+    if (!selectedFacilityInstallationSchoolDemand) {
+      return [];
+    }
+
+    return [
+      {
+        label: "Établissements rattachés",
+        value: formatInteger(selectedFacilityInstallationSchoolDemand.schools_total),
+        detail: `${formatInteger(selectedFacilityInstallationSchoolDemand.schools_geolocated_total)} géolocalisés`,
+      },
+      {
+        label: "Élèves potentiels",
+        value: formatInteger(selectedFacilityInstallationSchoolDemand.students_total),
+        detail: `${formatInteger(selectedFacilityInstallationSchoolDemand.primary_students)} premier degré`,
+      },
+      {
+        label: "Élèves / bassin du site",
+        value: formatNumber(selectedFacilityInstallationSchoolDemand.students_per_basin_on_site, 1),
+        detail: `${formatInteger(selectedFacilityInstallationSchoolDemand.basins_total_on_site)} bassins sur site`,
+      },
+      {
+        label: "Distance moyenne",
+        value: formatKilometers(
+          selectedFacilityInstallationSchoolDemand.average_distance_to_installation_km,
+        ),
+        detail: `${formatPercent(selectedFacilityInstallationSchoolDemand.distance_coverage_share)} des élèves géolocalisés`,
+      },
+      {
+        label: "À moins de 5 km",
+        value: formatPercent(
+          selectedFacilityInstallationSchoolDemand.students_within_5km_installation_share,
+        ),
+        detail: "Part des élèves géolocalisés affectés à ce site.",
+      },
+    ];
+  }, [selectedFacilityInstallationSchoolDemand]);
+
+  const selectedFacilitySchoolDriveFacts = useMemo(() => {
+    if (!selectedFacilityInstallationSchoolDemand) {
+      return [];
+    }
+
+    return [
+      {
+        label: "Établissements rattachés",
+        value: formatInteger(selectedFacilityInstallationSchoolDemand.schools_total),
+        detail: `${formatInteger(selectedFacilityInstallationSchoolDemand.schools_geolocated_total)} géolocalisés`,
+      },
+      {
+        label: "Élèves potentiels",
+        value: formatInteger(selectedFacilityInstallationSchoolDemand.students_total),
+        detail: `${formatInteger(selectedFacilityInstallationSchoolDemand.primary_students)} premier degré`,
+      },
+      {
+        label: "Élèves / bassin du site",
+        value: formatNumber(selectedFacilityInstallationSchoolDemand.students_per_basin_on_site, 1),
+        detail: `${formatInteger(selectedFacilityInstallationSchoolDemand.basins_total_on_site)} bassins sur site`,
+      },
+      {
+        label: "Temps moyen voiture",
+        value: formatMinutes(
+          selectedFacilityInstallationSchoolDemand.average_drive_time_to_installation_min,
+        ),
+        detail: `${formatPercent(selectedFacilityInstallationSchoolDemand.drive_time_coverage_share)} des élèves avec temps calculé`,
+      },
+      {
+        label: "Élèves < 15 min",
+        value: formatPercent(
+          selectedFacilityInstallationSchoolDemand.students_within_15min_installation_share,
+        ),
+        detail: "Part des élèves avec temps voiture calculé affectés à ce site.",
+      },
+    ];
+  }, [selectedFacilityInstallationSchoolDemand]);
+
+  const selectedFacilityTransitFacts = useMemo(() => {
+    if (!selectedFacilityTransit) {
+      return [];
+    }
+
+    return [
+      {
+        label: "Arrêt ou gare le plus proche",
+        value: formatKilometers(selectedFacilityTransit.nearest_transit_distance_km),
+        detail: selectedFacilityTransit.nearest_transit_hub ?? "Repère GTFS non disponible",
+      },
+      {
+        label: "Arrêts actifs < 500 m",
+        value: formatInteger(selectedFacilityTransit.active_transit_hubs_within_500m),
+        detail: `${formatInteger(selectedFacilityTransit.active_transit_hubs_within_1000m)} arrêts actifs à 1 km`,
+      },
+      {
+        label: "Passages théoriques < 500 m",
+        value: formatInteger(selectedFacilityTransit.weekday_trips_within_500m),
+        detail: `${formatInteger(selectedFacilityTransit.weekday_trips_within_1000m)} passages théoriques à 1 km`,
+      },
+      {
+        label: "Modes repérés",
+        value: selectedFacilityTransit.nearest_transit_modes ?? "n.c.",
+        detail: "Lecture GTFS potentielle en semaine, sans calcul porte-à-porte.",
+      },
+    ];
+  }, [selectedFacilityTransit]);
 
   const licenceTrendSummary = useMemo(() => {
     const licences2023 = sumBy(filteredDepartments, "licences_ffn_2023");
@@ -1108,7 +2129,7 @@ function App() {
     return Array.from(counters.entries()).map(([name, value]) => ({
       name,
       value,
-      color: MANAGEMENT_COLORS[name] ?? "#56768c",
+      color: MANAGEMENT_COLORS[name] ?? "#666666",
     }));
   }, [filteredBasins]);
 
@@ -1155,6 +2176,81 @@ function App() {
     [filteredExtendedInventory, inventoryCountMode],
   );
 
+  const operationalSummary = useMemo(
+    () => buildOperationalSummary(filteredOperationalBasins),
+    [filteredOperationalBasins],
+  );
+
+  const overviewOperationalSummary = useMemo(
+    () => buildOperationalSummary(scopedOperationalBasins),
+    [scopedOperationalBasins],
+  );
+
+  const schoolOperationalBasins = useMemo(
+    () => filteredOperationalBasins.filter((item) => item.usage_scolaires === 1),
+    [filteredOperationalBasins],
+  );
+
+  const schoolOperationalSummary = useMemo(
+    () => buildOperationalSummary(schoolOperationalBasins),
+    [schoolOperationalBasins],
+  );
+
+  const overviewSchoolOperationalBasins = useMemo(
+    () => scopedOperationalBasins.filter((item) => item.usage_scolaires === 1),
+    [scopedOperationalBasins],
+  );
+
+  const overviewSchoolOperationalSummary = useMemo(
+    () => buildOperationalSummary(overviewSchoolOperationalBasins),
+    [overviewSchoolOperationalBasins],
+  );
+
+  const serviceYearBreakdown = useMemo(
+    () => buildOperationalServiceYearRows(filteredOperationalBasins, inventoryCountMode),
+    [filteredOperationalBasins, inventoryCountMode],
+  );
+
+  const energyBreakdown = useMemo(
+    () =>
+      buildOperationalMultiValueBreakdownRows(
+        filteredOperationalBasins,
+        (item) => splitPipeSeparatedValues(item.energy_sources),
+        inventoryCountMode,
+      ),
+    [filteredOperationalBasins, inventoryCountMode],
+  );
+
+  const transportBreakdown = useMemo(
+    () =>
+      buildOperationalMultiValueBreakdownRows(
+        filteredOperationalBasins,
+        (item) => splitPipeSeparatedValues(item.transport_access_modes),
+        inventoryCountMode,
+      ),
+    [filteredOperationalBasins, inventoryCountMode],
+  );
+
+  const schoolConditionRows = useMemo(
+    () =>
+      buildOperationalConditionRows(
+        schoolOperationalBasins,
+        [
+          { label: "Accès transport renseigné", test: (item) => hasTransportAccess(item) },
+          { label: "Accessibilité renseignée", test: (item) => hasAccessibilitySupport(item) },
+          { label: "Arrêté d'ouverture", test: (item) => item.opening_authorized_flag === 1 },
+          { label: "Travaux depuis 2015", test: (item) => hasRecentWorks(item) },
+        ],
+        inventoryCountMode,
+      ),
+    [inventoryCountMode, schoolOperationalBasins],
+  );
+
+  const schoolServiceYearBreakdown = useMemo(
+    () => buildOperationalServiceYearRows(schoolOperationalBasins, inventoryCountMode),
+    [inventoryCountMode, schoolOperationalBasins],
+  );
+
   const territorySurfaceRows = useMemo(() => {
     return [...scopedEpci]
       .filter((item) => item.bassins_total > 0 || item.surface_totale_bassins_m2 > 0)
@@ -1170,6 +2266,79 @@ function App() {
       }))
       .sort((left, right) => right.surfacePer1000Hab - left.surfacePer1000Hab);
   }, [scopedEpci]);
+
+  const overviewOperationalTerritoryRows = useMemo(
+    () => buildOperationalTerritoryRows(scopedEpci, scopedOperationalBasins),
+    [scopedEpci, scopedOperationalBasins],
+  );
+
+  const overviewAccessibilityHighlights = useMemo<AccessibilityHighlightRow[]>(() => {
+    const remoteEpci =
+      [...scopedAccessibilityEpciRows].sort(
+        (left, right) =>
+          (right.average_drive_time_to_installation_min ?? 0) -
+          (left.average_drive_time_to_installation_min ?? 0),
+      )[0] ?? null;
+
+    return [
+      {
+        label: "Temps moyen",
+        value: formatMinutes(overviewAccessibilitySummary.average_drive_time_to_installation_min),
+        detail: `${formatInteger(overviewAccessibilitySummary.communes_routed_total)} communes calculées`,
+      },
+      {
+        label: "Population < 15 min",
+        value: formatPercent(overviewAccessibilitySummary.population_within_15min_share),
+        detail: `${formatPercent(overviewAccessibilitySummary.population_within_20min_share)} sous 20 min`,
+      },
+      {
+        label: "Communes < 15 min",
+        value: formatPercent(overviewAccessibilitySummary.communes_within_15min_share),
+        detail: `${formatInteger(overviewAccessibilitySummary.reachable_installations_total)} installations mobilisées`,
+      },
+      {
+        label: "Point d'attention",
+        value: remoteEpci ? shortenEpci(remoteEpci.epci_nom ?? "EPCI", 24) : "n.c.",
+        detail: remoteEpci
+          ? `${formatMinutes(remoteEpci.average_drive_time_to_installation_min)} de moyenne voiture`
+          : "Aucune lecture EPCI n'est disponible sur ce périmètre.",
+      },
+    ];
+  }, [overviewAccessibilitySummary, scopedAccessibilityEpciRows]);
+
+  const overviewTransitHighlights = useMemo<AccessibilityHighlightRow[]>(() => {
+    const bestConnectedEpci =
+      [...scopedTransitEpciRows].sort(
+        (left, right) =>
+          (left.average_nearest_stop_distance_km ?? Number.POSITIVE_INFINITY) -
+          (right.average_nearest_stop_distance_km ?? Number.POSITIVE_INFINITY),
+      )[0] ?? null;
+
+    return [
+      {
+        label: "Distance moyenne à un arrêt",
+        value: formatKilometers(overviewTransitSummary.average_nearest_stop_distance_km),
+        detail: `${formatInteger(overviewTransitSummary.transit_hubs_total)} arrêts ou gares actifs`,
+      },
+      {
+        label: "Population < 500 m",
+        value: formatPercent(overviewTransitSummary.population_within_500m_share),
+        detail: `${formatPercent(overviewTransitSummary.population_within_1000m_share)} à moins d'1 km`,
+      },
+      {
+        label: "Installations < 500 m",
+        value: formatPercent(overviewTransitSummary.installations_within_500m_share),
+        detail: `${formatPercent(overviewTransitSummary.installations_within_1000m_share)} à moins d'1 km`,
+      },
+      {
+        label: "Point d'appui",
+        value: bestConnectedEpci ? shortenEpci(bestConnectedEpci.epci_nom ?? "EPCI", 24) : "n.c.",
+        detail: bestConnectedEpci
+          ? `${formatKilometers(bestConnectedEpci.average_nearest_stop_distance_km)} de distance moyenne`
+          : "Aucune lecture EPCI GTFS n'est disponible sur ce périmètre.",
+      },
+    ];
+  }, [overviewTransitSummary, scopedTransitEpciRows]);
 
   const specializedEquipmentCount = useMemo(
     () => scopedBasins.filter((item) => !CORE_AQUATIC_TYPES.has(item.type_equipement)).length,
@@ -1385,6 +2554,12 @@ function App() {
   const hasFacilitiesFiltersActive =
     managementFilter !== "all" || basinUsageFilter !== "all" || localityTypeFilter !== "all" || basinSearch !== "";
 
+  function openFacilitySheet(equipmentId: string) {
+    setActiveTab("facilities");
+    setFacilitiesView("sheet");
+    setSelectedFacilityEquipmentId(equipmentId);
+  }
+
   function openTerritoryCard(epciCode: string) {
     pendingTerritoryJumpRef.current = true;
     setActiveTab("territories");
@@ -1410,6 +2585,27 @@ function App() {
       (item) => selectedEpciCode === "all" || item.epci_code === selectedEpciCode,
     );
   }, [scopedBasins, selectedEpciCode]);
+
+  const territoryOperationalBasins = useMemo(
+    () => filteredOperationalBasins.filter((item) => selectedEpciCode === "all" || item.epci_code === selectedEpciCode),
+    [filteredOperationalBasins, selectedEpciCode],
+  );
+
+  const territorySchoolEstablishments = useMemo(
+    () =>
+      scopedSchoolEstablishments.filter(
+        (item) => selectedEpciCode === "all" || item.epci_code === selectedEpciCode,
+      ),
+    [scopedSchoolEstablishments, selectedEpciCode],
+  );
+
+  const territoryCommuneAccessibility = useMemo(
+    () =>
+      scopedCommuneAccessibility.filter(
+        (item) => selectedEpciCode === "all" || item.epci_code === selectedEpciCode,
+      ),
+    [scopedCommuneAccessibility, selectedEpciCode],
+  );
 
   const territoryName = activeEpci?.epci_nom ?? departmentLabel;
   const territorySubtitle = activeEpci
@@ -1533,7 +2729,7 @@ function App() {
       .map(([name, value]) => ({
         name,
         value,
-        color: MANAGEMENT_COLORS[name] ?? "#56768c",
+        color: MANAGEMENT_COLORS[name] ?? "#666666",
       }))
       .sort((left, right) => right.value - left.value);
   }, [territoryBasins]);
@@ -1571,6 +2767,45 @@ function App() {
       },
     ];
   }, [territoryBasins, territoryCommunes]);
+
+  const territoryOperationalFacts = useMemo(() => {
+    const summary = buildOperationalSummary(territoryOperationalBasins);
+    return [
+      {
+        label: "Mise en service moyenne",
+        value:
+          summary.averageServiceYear > 0
+            ? formatInteger(Math.round(summary.averageServiceYear))
+            : "n.c.",
+        detail: `${formatPercent(summary.yearCoverageShare)} du parc a ce champ renseigné`,
+      },
+      {
+        label: "Parc antérieur à 2000",
+        value: formatPercent(summary.legacyShare),
+        detail: "Part des bassins avec année de mise en service antérieure à 2000",
+      },
+      {
+        label: "Travaux depuis 2015",
+        value: formatPercent(summary.recentWorksShare),
+        detail: "Présence d'une date ou période de gros travaux récente",
+      },
+      {
+        label: "Accès transport",
+        value: formatPercent(summary.transportAccessShare),
+        detail: "Modes de transport en commun déclarés dans Data ES",
+      },
+      {
+        label: "Accessibilité renseignée",
+        value: formatPercent(summary.accessibilityShare),
+        detail: "Handicap déclaré ou détail PMR / sensoriel disponible",
+      },
+      {
+        label: "Bassins scolaires avec conditions favorables",
+        value: formatPercent(summary.schoolOperationalShare),
+        detail: "Parmi les bassins scolaires : transport, accessibilité et arrêté d'ouverture",
+      },
+    ];
+  }, [territoryOperationalBasins]);
 
   const overviewMarkers = useMemo(() => {
     if (!currentOverview) {
@@ -1736,6 +2971,30 @@ function App() {
     return scopedBasins.filter((item) => item.epci_code === selectedComparisonEpciCode);
   }, [scopedBasins, selectedComparisonEpciCode]);
 
+  const comparisonOperationalBasins = useMemo(
+    () =>
+      selectedComparisonEpciCode === "all"
+        ? []
+        : filteredOperationalBasins.filter((item) => item.epci_code === selectedComparisonEpciCode),
+    [filteredOperationalBasins, selectedComparisonEpciCode],
+  );
+
+  const comparisonSchoolEstablishments = useMemo(
+    () =>
+      selectedComparisonEpciCode === "all"
+        ? []
+        : scopedSchoolEstablishments.filter((item) => item.epci_code === selectedComparisonEpciCode),
+    [scopedSchoolEstablishments, selectedComparisonEpciCode],
+  );
+
+  const comparisonCommuneAccessibility = useMemo(
+    () =>
+      selectedComparisonEpciCode === "all"
+        ? []
+        : scopedCommuneAccessibility.filter((item) => item.epci_code === selectedComparisonEpciCode),
+    [scopedCommuneAccessibility, selectedComparisonEpciCode],
+  );
+
   const comparisonTerritorySummary = useMemo<TerritoryMetricsSummary | null>(() => {
     if (!comparisonEpci) {
       return null;
@@ -1750,6 +3009,297 @@ function App() {
       communesWithoutBasin: countCommunesWithLicencesSansBassin(comparisonTerritoryCommunes),
     });
   }, [comparisonEpci, comparisonTerritoryCommunes]);
+
+  const territoryOperationalSummary = useMemo(
+    () => buildOperationalSummary(territoryOperationalBasins),
+    [territoryOperationalBasins],
+  );
+
+  const territorySchoolDemand = useMemo<SchoolDemandOverview>(() => {
+    if (selectedEpciCode === "all") {
+      return overviewSchoolDemandSummary;
+    }
+
+    return (
+      schoolDemandEpciByCode.get(selectedEpciCode) ??
+      buildSchoolDemandSummary(
+        territorySchoolEstablishments,
+        territoryBasins.length,
+        countUnique(territoryBasins.map((item) => item.id_installation)),
+        territoryBasins.filter((item) => item.usage_scolaires === 1).length,
+      )
+    );
+  }, [
+    overviewSchoolDemandSummary,
+    schoolDemandEpciByCode,
+    selectedEpciCode,
+    territoryBasins,
+    territorySchoolEstablishments,
+  ]);
+
+  const territoryAccessibilitySummary = useMemo<AccessibilityOverview>(() => {
+    if (selectedEpciCode === "all") {
+      return overviewAccessibilitySummary;
+    }
+
+    return (
+      accessibilityEpciByCode.get(selectedEpciCode) ??
+      buildAccessibilitySummary(
+        territoryCommuneAccessibility,
+        overviewAccessibilitySummary.installations_total,
+      )
+    );
+  }, [
+    accessibilityEpciByCode,
+    overviewAccessibilitySummary,
+    selectedEpciCode,
+    territoryCommuneAccessibility,
+  ]);
+
+  const territoryTransitSummary = useMemo<TransitOverview>(() => {
+    if (selectedEpciCode === "all") {
+      return overviewTransitSummary;
+    }
+
+    return (
+      transitEpciByCode.get(selectedEpciCode) ??
+      buildTransitSummary(
+        scopedCommuneTransit.filter((item) => item.epci_code === selectedEpciCode),
+        scopedInstallationTransit.filter((item) => item.epci_code === selectedEpciCode),
+        scopedSchoolEstablishments.filter((item) => item.epci_code === selectedEpciCode),
+        overviewTransitSummary.transit_hubs_total,
+      )
+    );
+  }, [
+    overviewTransitSummary,
+    scopedCommuneTransit,
+    scopedInstallationTransit,
+    scopedSchoolEstablishments,
+    selectedEpciCode,
+    transitEpciByCode,
+  ]);
+
+  const territorySchoolFacts = useMemo(() => {
+    return [
+      {
+        label: "Établissements scolaires",
+        value: formatInteger(territorySchoolDemand.schools_total),
+        detail: `${formatInteger(territorySchoolDemand.students_total)} élèves potentiels`,
+      },
+      {
+        label: "Premier / second degré",
+        value: `${formatInteger(territorySchoolDemand.primary_students)} / ${formatInteger(
+          territorySchoolDemand.secondary_students,
+        )}`,
+        detail: "Lecture des effectifs 2024 intégrés dans le socle scolaire.",
+      },
+      {
+        label: "Élèves / installation",
+        value: formatNumber(territorySchoolDemand.students_per_installation, 1),
+        detail: `${formatInteger(territorySchoolDemand.installations_total)} installations retenues`,
+      },
+      {
+        label: "Distance moyenne",
+        value: formatKilometers(territorySchoolDemand.average_distance_to_installation_km),
+        detail: `${formatPercent(territorySchoolDemand.distance_coverage_share)} des élèves géolocalisés`,
+      },
+      {
+        label: "À moins de 5 km d'une installation",
+        value: formatPercent(territorySchoolDemand.students_within_5km_installation_share),
+        detail: "Part des élèves géolocalisés dans le périmètre retenu.",
+      },
+    ];
+  }, [territorySchoolDemand]);
+
+  const territorySchoolDriveFacts = useMemo(() => {
+    return [
+      {
+        label: "Établissements scolaires",
+        value: formatInteger(territorySchoolDemand.schools_total),
+        detail: `${formatInteger(territorySchoolDemand.students_total)} élèves potentiels`,
+      },
+      {
+        label: "Premier / second degré",
+        value: `${formatInteger(territorySchoolDemand.primary_students)} / ${formatInteger(
+          territorySchoolDemand.secondary_students,
+        )}`,
+        detail: "Lecture des effectifs 2024 intégrés dans le socle scolaire.",
+      },
+      {
+        label: "Élèves / installation",
+        value: formatNumber(territorySchoolDemand.students_per_installation, 1),
+        detail: `${formatInteger(territorySchoolDemand.installations_total)} installations retenues`,
+      },
+      {
+        label: "Temps moyen voiture",
+        value: formatMinutes(territorySchoolDemand.average_drive_time_to_installation_min),
+        detail: `${formatPercent(territorySchoolDemand.drive_time_coverage_share)} des élèves avec temps calculé`,
+      },
+      {
+        label: "Élèves < 15 min d'une installation",
+        value: formatPercent(territorySchoolDemand.students_within_15min_installation_share),
+        detail: "Part des élèves avec temps voiture calculé dans le périmètre retenu.",
+      },
+    ];
+  }, [territorySchoolDemand]);
+
+  const territoryAccessibilityFacts = useMemo(() => {
+    const farthestCommune =
+      [...territoryCommuneAccessibility]
+        .filter(
+          (item) =>
+            typeof item.drive_time_to_nearest_installation_min === "number" &&
+            Number.isFinite(item.drive_time_to_nearest_installation_min),
+        )
+        .sort(
+          (left, right) =>
+            (right.drive_time_to_nearest_installation_min ?? 0) -
+            (left.drive_time_to_nearest_installation_min ?? 0),
+        )[0] ?? null;
+
+    return [
+      {
+        label: "Temps moyen voiture",
+        value: formatMinutes(territoryAccessibilitySummary.average_drive_time_to_installation_min),
+        detail: `${formatInteger(territoryAccessibilitySummary.communes_routed_total)} communes calculées`,
+      },
+      {
+        label: "Distance moyenne",
+        value: formatKilometers(territoryAccessibilitySummary.average_drive_distance_to_installation_km),
+        detail: `${formatInteger(territoryAccessibilitySummary.reachable_installations_total)} sites mobilisés`,
+      },
+      {
+        label: "Population < 15 min",
+        value: formatPercent(territoryAccessibilitySummary.population_within_15min_share),
+        detail: `${formatPercent(territoryAccessibilitySummary.population_within_20min_share)} sous 20 min`,
+      },
+      {
+        label: "Communes < 15 min",
+        value: formatPercent(territoryAccessibilitySummary.communes_within_15min_share),
+        detail: farthestCommune
+          ? `${farthestCommune.commune ?? "Commune n.c."} reste la plus eloignee (${formatMinutes(
+              farthestCommune.drive_time_to_nearest_installation_min,
+            )})`
+          : "Aucune mesure voiture n'est disponible sur ce périmètre.",
+      },
+    ];
+  }, [territoryAccessibilitySummary, territoryCommuneAccessibility]);
+
+  const territoryTransitFacts = useMemo(() => {
+    const bestConnectedCommune =
+      [...scopedCommuneTransit]
+        .filter(
+          (item) =>
+            item.epci_code === selectedEpciCode &&
+            typeof item.nearest_transit_distance_km === "number" &&
+            Number.isFinite(item.nearest_transit_distance_km),
+        )
+        .sort(
+          (left, right) =>
+            (left.nearest_transit_distance_km ?? Number.POSITIVE_INFINITY) -
+            (right.nearest_transit_distance_km ?? Number.POSITIVE_INFINITY),
+        )[0] ?? null;
+
+    return [
+      {
+        label: "Distance moyenne à un arrêt",
+        value: formatKilometers(territoryTransitSummary.average_nearest_stop_distance_km),
+        detail: `${formatInteger(territoryTransitSummary.transit_hubs_total)} arrêts ou gares actifs dans le socle GTFS`,
+      },
+      {
+        label: "Population < 500 m",
+        value: formatPercent(territoryTransitSummary.population_within_500m_share),
+        detail: `${formatPercent(territoryTransitSummary.population_within_1000m_share)} à moins d'1 km`,
+      },
+      {
+        label: "Installations < 500 m",
+        value: formatPercent(territoryTransitSummary.installations_within_500m_share),
+        detail: `${formatPercent(territoryTransitSummary.installations_within_1000m_share)} à moins d'1 km`,
+      },
+      {
+        label: "Élèves < 500 m",
+        value: formatPercent(territoryTransitSummary.students_within_500m_share),
+        detail: `${formatPercent(territoryTransitSummary.students_within_1000m_share)} des élèves à moins d'1 km`,
+      },
+      {
+        label: "Passages théoriques à 1 km",
+        value: formatInteger(Math.round(territoryTransitSummary.average_weekday_trips_within_1000m)),
+        detail: bestConnectedCommune
+          ? `${bestConnectedCommune.commune ?? "Commune n.c."} est la mieux ancrée (${formatKilometers(
+              bestConnectedCommune.nearest_transit_distance_km,
+            )})`
+          : "Lecture GTFS potentielle en semaine, sans calcul porte-à-porte.",
+      },
+    ];
+  }, [scopedCommuneTransit, selectedEpciCode, territoryTransitSummary]);
+
+  const comparisonOperationalSummary = useMemo(
+    () => buildOperationalSummary(comparisonOperationalBasins),
+    [comparisonOperationalBasins],
+  );
+
+  const comparisonSchoolDemand = useMemo<SchoolDemandOverview>(() => {
+    if (selectedComparisonEpciCode === "all") {
+      return EMPTY_SCHOOL_DEMAND_SUMMARY;
+    }
+
+    return (
+      schoolDemandEpciByCode.get(selectedComparisonEpciCode) ??
+      buildSchoolDemandSummary(
+        comparisonSchoolEstablishments,
+        comparisonTerritoryBasins.length,
+        countUnique(comparisonTerritoryBasins.map((item) => item.id_installation)),
+        comparisonTerritoryBasins.filter((item) => item.usage_scolaires === 1).length,
+      )
+    );
+  }, [
+    comparisonSchoolEstablishments,
+    comparisonTerritoryBasins,
+    schoolDemandEpciByCode,
+    selectedComparisonEpciCode,
+  ]);
+
+  const comparisonAccessibilitySummary = useMemo<AccessibilityOverview>(() => {
+    if (selectedComparisonEpciCode === "all") {
+      return EMPTY_ACCESSIBILITY_SUMMARY;
+    }
+
+    return (
+      accessibilityEpciByCode.get(selectedComparisonEpciCode) ??
+      buildAccessibilitySummary(
+        comparisonCommuneAccessibility,
+        overviewAccessibilitySummary.installations_total,
+      )
+    );
+  }, [
+    accessibilityEpciByCode,
+    comparisonCommuneAccessibility,
+    overviewAccessibilitySummary.installations_total,
+    selectedComparisonEpciCode,
+  ]);
+
+  const comparisonTransitSummary = useMemo<TransitOverview>(() => {
+    if (selectedComparisonEpciCode === "all") {
+      return EMPTY_TRANSIT_SUMMARY;
+    }
+
+    return (
+      transitEpciByCode.get(selectedComparisonEpciCode) ??
+      buildTransitSummary(
+        scopedCommuneTransit.filter((item) => item.epci_code === selectedComparisonEpciCode),
+        scopedInstallationTransit.filter((item) => item.epci_code === selectedComparisonEpciCode),
+        scopedSchoolEstablishments.filter((item) => item.epci_code === selectedComparisonEpciCode),
+        overviewTransitSummary.transit_hubs_total,
+      )
+    );
+  }, [
+    overviewTransitSummary.transit_hubs_total,
+    scopedCommuneTransit,
+    scopedInstallationTransit,
+    scopedSchoolEstablishments,
+    selectedComparisonEpciCode,
+    transitEpciByCode,
+  ]);
 
   const filteredComparableTerritoryBasins = useMemo(
     () =>
@@ -1850,6 +3400,18 @@ function App() {
         comparison: comparisonEpci.bassins_total,
       },
       {
+        label: "Établissements scolaires",
+        kind: "count" as const,
+        primary: territorySchoolDemand.schools_total,
+        comparison: comparisonSchoolDemand.schools_total,
+      },
+      {
+        label: "Élèves potentiels",
+        kind: "count" as const,
+        primary: territorySchoolDemand.students_total,
+        comparison: comparisonSchoolDemand.students_total,
+      },
+      {
         label: "Surface pour 1 000 hab.",
         kind: "ratio" as const,
         primary: territorySummary.surfaceM2Pour1000Hab,
@@ -1874,6 +3436,114 @@ function App() {
         comparison: comparisonEpci.part_population_qpv,
       },
       {
+        label: "Mise en service moyenne",
+        kind: "count" as const,
+        primary: territoryOperationalSummary.averageServiceYear,
+        comparison: comparisonOperationalSummary.averageServiceYear,
+      },
+      {
+        label: "Parc mis en service avant 2000",
+        kind: "percent" as const,
+        primary: territoryOperationalSummary.legacyShare,
+        comparison: comparisonOperationalSummary.legacyShare,
+      },
+      {
+        label: "Travaux depuis 2015",
+        kind: "percent" as const,
+        primary: territoryOperationalSummary.recentWorksShare,
+        comparison: comparisonOperationalSummary.recentWorksShare,
+      },
+      {
+        label: "Élèves / installation",
+        kind: "ratio" as const,
+        primary: territorySchoolDemand.students_per_installation,
+        comparison: comparisonSchoolDemand.students_per_installation,
+      },
+      {
+        label: "Distance moyenne à une installation",
+        kind: "ratio" as const,
+        primary: territorySchoolDemand.average_distance_to_installation_km,
+        comparison: comparisonSchoolDemand.average_distance_to_installation_km,
+      },
+      {
+        label: "Temps moyen voiture vers une installation",
+        kind: "duration" as const,
+        primary: territoryAccessibilitySummary.average_drive_time_to_installation_min,
+        comparison: comparisonAccessibilitySummary.average_drive_time_to_installation_min,
+      },
+      {
+        label: "Distance moyenne voiture",
+        kind: "distance" as const,
+        primary: territoryAccessibilitySummary.average_drive_distance_to_installation_km,
+        comparison: comparisonAccessibilitySummary.average_drive_distance_to_installation_km,
+      },
+      {
+        label: "Population à moins de 15 min",
+        kind: "percent" as const,
+        primary: territoryAccessibilitySummary.population_within_15min_share,
+        comparison: comparisonAccessibilitySummary.population_within_15min_share,
+      },
+      {
+        label: "Communes à moins de 15 min",
+        kind: "percent" as const,
+        primary: territoryAccessibilitySummary.communes_within_15min_share,
+        comparison: comparisonAccessibilitySummary.communes_within_15min_share,
+      },
+      {
+        label: "Distance moyenne à un arrêt TC",
+        kind: "distance" as const,
+        primary: territoryTransitSummary.average_nearest_stop_distance_km,
+        comparison: comparisonTransitSummary.average_nearest_stop_distance_km,
+      },
+      {
+        label: "Population à moins de 500 m d'un arrêt",
+        kind: "percent" as const,
+        primary: territoryTransitSummary.population_within_500m_share,
+        comparison: comparisonTransitSummary.population_within_500m_share,
+      },
+      {
+        label: "Population à moins d'1 km d'un arrêt",
+        kind: "percent" as const,
+        primary: territoryTransitSummary.population_within_1000m_share,
+        comparison: comparisonTransitSummary.population_within_1000m_share,
+      },
+      {
+        label: "Installations à moins de 500 m d'un arrêt",
+        kind: "percent" as const,
+        primary: territoryTransitSummary.installations_within_500m_share,
+        comparison: comparisonTransitSummary.installations_within_500m_share,
+      },
+      {
+        label: "Élèves à moins de 500 m d'un arrêt",
+        kind: "percent" as const,
+        primary: territoryTransitSummary.students_within_500m_share,
+        comparison: comparisonTransitSummary.students_within_500m_share,
+      },
+      {
+        label: "Accès transport renseigné",
+        kind: "percent" as const,
+        primary: territoryOperationalSummary.transportAccessShare,
+        comparison: comparisonOperationalSummary.transportAccessShare,
+      },
+      {
+        label: "Accessibilité renseignée",
+        kind: "percent" as const,
+        primary: territoryOperationalSummary.accessibilityShare,
+        comparison: comparisonOperationalSummary.accessibilityShare,
+      },
+      {
+        label: "Bassins scolaires avec conditions favorables",
+        kind: "percent" as const,
+        primary: territoryOperationalSummary.schoolOperationalShare,
+        comparison: comparisonOperationalSummary.schoolOperationalShare,
+      },
+      {
+        label: "Élèves à moins de 5 km",
+        kind: "percent" as const,
+        primary: territorySchoolDemand.students_within_5km_installation_share,
+        comparison: comparisonSchoolDemand.students_within_5km_installation_share,
+      },
+      {
         label: "Communes licenciées sans bassin",
         kind: "percent" as const,
         primary: territorySummary.communesSansBassinParmiLicenciees,
@@ -1883,7 +3553,48 @@ function App() {
       ...item,
       delta: item.primary - item.comparison,
     }));
-  }, [activeEpci, comparisonEpci, comparisonTerritorySummary, territorySummary]);
+  }, [
+    activeEpci,
+    comparisonEpci,
+    comparisonAccessibilitySummary,
+    comparisonTransitSummary,
+    comparisonSchoolDemand,
+    comparisonOperationalSummary,
+    comparisonTerritorySummary,
+    territoryAccessibilitySummary,
+    territoryTransitSummary,
+    territoryOperationalSummary,
+    territorySchoolDemand,
+    territorySummary,
+  ]);
+
+  const territoryDirectComparisonRowsWithDrive = useMemo(() => {
+    if (territoryDirectComparisonRows.length === 0) {
+      return [];
+    }
+
+    return [
+      ...territoryDirectComparisonRows,
+      {
+        label: "Temps moyen voiture vers une installation",
+        kind: "duration" as const,
+        primary: territorySchoolDemand.average_drive_time_to_installation_min,
+        comparison: comparisonSchoolDemand.average_drive_time_to_installation_min,
+        delta:
+          territorySchoolDemand.average_drive_time_to_installation_min -
+          comparisonSchoolDemand.average_drive_time_to_installation_min,
+      },
+      {
+        label: "Élèves à moins de 15 min",
+        kind: "percent" as const,
+        primary: territorySchoolDemand.students_within_15min_installation_share,
+        comparison: comparisonSchoolDemand.students_within_15min_installation_share,
+        delta:
+          territorySchoolDemand.students_within_15min_installation_share -
+          comparisonSchoolDemand.students_within_15min_installation_share,
+      },
+    ];
+  }, [comparisonSchoolDemand, territoryDirectComparisonRows, territorySchoolDemand]);
 
   const investigationRows = useMemo<InvestigationProfileRow[]>(() => {
     if (filteredEpci.length === 0) {
@@ -2255,7 +3966,11 @@ function App() {
           </div>
           <div className="meta-card">
             <span className="meta-label">Source</span>
-            <strong>Data.Sports</strong>
+            <strong>
+              {Array.isArray(data.meta.source_labels) && data.meta.source_labels.length > 0
+                ? data.meta.source_labels.join(" · ")
+                : data.meta.source_summary}
+            </strong>
           </div>
           <div className="meta-card">
             <span className="meta-label">Données générées</span>
@@ -2344,7 +4059,9 @@ function App() {
                 <h2>{"Choisir une lecture synth\u00e8se"}</h2>
               </div>
               <p>
-                {"La synth\u00e8se est maintenant r\u00e9partie entre un panorama global et une lecture sociale d\u00e9di\u00e9e QPV."}
+                {
+                  "La synth\u00e8se est maintenant r\u00e9partie entre un panorama global, une lecture sociale d\u00e9di\u00e9e QPV et un point de situation sur l'\u00e9tat du parc."
+                }
               </p>
             </div>
             <div className="chip-row workspace-nav-row" role="tablist" aria-label="Lecture synthèse">
@@ -2432,7 +4149,7 @@ function App() {
               <div className="chart-wrap tall">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={departmentComparison} margin={{ top: 8, right: 10, bottom: 8, left: 0 }}>
-                    <CartesianGrid strokeDasharray="4 4" vertical={false} stroke="#d2ddd6" />
+                    <CartesianGrid strokeDasharray="4 4" vertical={false} stroke="#d6d6d6" />
                     <XAxis dataKey="label" tickLine={false} axisLine={false} />
                     <YAxis yAxisId="left" tickLine={false} axisLine={false} width={52} />
                     <YAxis yAxisId="right" orientation="right" tickLine={false} axisLine={false} width={52} />
@@ -2441,7 +4158,7 @@ function App() {
                       {departmentComparison.map((item) => (
                         <Cell
                           key={`${item.label}-bassins`}
-                          fill={item.highlight ? "#0f7c82" : "#9bc9c1"}
+                          fill={item.highlight ? "#000091" : "#c5c5fe"}
                         />
                       ))}
                     </Bar>
@@ -2454,7 +4171,7 @@ function App() {
                       {departmentComparison.map((item) => (
                         <Cell
                           key={`${item.label}-licences`}
-                          fill={item.highlight ? "#ff8f5c" : "#ffc5a6"}
+                          fill={item.highlight ? "#b34000" : "#ffd7cb"}
                         />
                       ))}
                     </Bar>
@@ -2489,7 +4206,7 @@ function App() {
 
           {overviewView === "social" ? (
             <>
-          <section className="panel">
+          <section className="panel overview-section-panel">
             <div className="panel-heading">
               <div>
                 <span className="eyebrow">Enjeux sociaux</span>
@@ -2559,7 +4276,7 @@ function App() {
                       layout="vertical"
                       margin={{ top: 0, right: 18, bottom: 0, left: 0 }}
                     >
-                      <CartesianGrid strokeDasharray="4 4" horizontal={false} stroke="#d2ddd6" />
+                    <CartesianGrid strokeDasharray="4 4" horizontal={false} stroke="#d6d6d6" />
                       <XAxis type="number" domain={[0, 100]} tickLine={false} axisLine={false} />
                       <YAxis
                         dataKey="epci_nom"
@@ -2574,7 +4291,7 @@ function App() {
                         {qpvFragilityChartRows.map((item) => (
                           <Cell
                             key={item.epci_code}
-                            fill={Number(item.value) >= 60 ? "#ff8f5c" : "#1f4e70"}
+                            fill={Number(item.value) >= 60 ? "#b34000" : "#000091"}
                           />
                         ))}
                       </Bar>
@@ -2644,6 +4361,543 @@ function App() {
               )}
             </article>
           </section>
+            </>
+          ) : null}
+
+          {overviewView === "operations" ? (
+            <>
+          <section className="panel overview-section-panel">
+            <div className="panel-heading">
+              <div>
+                <span className="eyebrow">État du parc</span>
+                <h2>Lecture d'exploitation du périmètre actif</h2>
+              </div>
+              <p>
+                Cette vue synthétique lit le vieillissement, les travaux, l'accessibilité et les signaux
+                scolaires à l'échelle du périmètre départemental actif. Le détail reste dans la vue
+                Équipements puis État & scolaire.
+              </p>
+            </div>
+
+            <div className="investigation-summary">
+              <article className="summary-chip">
+                <span className="summary-chip-label">Bassins enrichis</span>
+                <strong>{formatInteger(overviewOperationalSummary.equipmentCount)}</strong>
+                <small>{formatInteger(overviewOperationalSummary.installationCount)} installations sur le périmètre actif.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Mise en service moyenne</span>
+                <strong>
+                  {overviewOperationalSummary.averageServiceYear > 0
+                    ? formatInteger(Math.round(overviewOperationalSummary.averageServiceYear))
+                    : "n.c."}
+                </strong>
+                <small>{formatPercent(overviewOperationalSummary.yearCoverageShare)} du parc renseigne ce champ.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Parc antérieur à 2000</span>
+                <strong>{formatPercent(overviewOperationalSummary.legacyShare)}</strong>
+                <small>Part des bassins avec une mise en service antérieure à 2000.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Travaux depuis 2015</span>
+                <strong>{formatPercent(overviewOperationalSummary.recentWorksShare)}</strong>
+                <small>Repère de rénovation récente sur le périmètre actif.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Accessibilité renseignée</span>
+                <strong>{formatPercent(overviewOperationalSummary.accessibilityShare)}</strong>
+                <small>Signal handicap, PMR ou sensoriel déclaré.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Conditions scolaires favorables</span>
+                <strong>{formatPercent(overviewSchoolOperationalSummary.schoolOperationalShare)}</strong>
+                <small>Transport, accessibilité et ouverture présents ensemble sur les bassins scolaires.</small>
+              </article>
+            </div>
+          </section>
+
+          <section className="panel notes-panel overview-section-panel">
+            <div className="panel-heading">
+              <div>
+                <span className="eyebrow">Repères rapides</span>
+                <h2>Comment lire cette vue</h2>
+              </div>
+              <p>Trois points d'attention utiles avant de basculer vers le détail équipements.</p>
+            </div>
+
+            <div className="message-stack">
+              <article className="message-item">
+                <strong>Vieillissement</strong>
+                <div>
+                  <span>Regarder ensemble l'année moyenne et la part avant 2000</span>
+                  <small>Un parc ancien sans repère de travaux récents mérite une vigilance plus forte.</small>
+                </div>
+              </article>
+              <article className="message-item">
+                <strong>Scolaire</strong>
+                <div>
+                  <span>Les bassins scolaires ne se valent pas tous</span>
+                  <small>Le dernier indicateur isole les sites où transport, accessibilité et ouverture sont renseignés.</small>
+                </div>
+              </article>
+              <article className="message-item">
+                <strong>Méthode</strong>
+                <div>
+                  <span>Cette lecture est synthétique et départementale</span>
+                  <small>
+                    Pour voir l'effet des filtres, des énergies ou des périodes de travaux, utiliser ensuite
+                    la vue Équipements puis État & scolaire.
+                  </small>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section className="panel table-panel overview-section-panel">
+              <div className="panel-heading">
+                <div>
+                  <span className="eyebrow">Fragilité d'exploitation</span>
+                  <h2>État du parc et lecture scolaire par EPCI</h2>
+                </div>
+                <p>
+                  Le tableau croise les signaux d'ancienneté, de travaux, d'accessibilité et d'accueil
+                  scolaire sans dépendre des filtres internes de la carte équipements.
+                </p>
+              </div>
+
+              {overviewOperationalTerritoryRows.length > 0 ? (
+                <div className="table-scroll">
+                  <table className="raw-table">
+                    <thead>
+                      <tr>
+                        <th>EPCI</th>
+                        <th>Bassins</th>
+                        <th>Mise en service moy.</th>
+                        <th>Avant 2000</th>
+                        <th>Travaux depuis 2015</th>
+                        <th>Accès transport</th>
+                        <th>Accessibilité</th>
+                        <th>Bassins scolaires</th>
+                        <th>Conditions favorables</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {overviewOperationalTerritoryRows.map((item) => (
+                        <tr key={item.epci_code}>
+                          <td>
+                            <strong>{item.epci_nom}</strong>
+                            <div>{shortDepartment(item.departement)}</div>
+                          </td>
+                          <td>{`${formatInteger(item.basins)} · ${formatInteger(item.installations)} sites`}</td>
+                          <td>{item.averageServiceYear > 0 ? formatInteger(Math.round(item.averageServiceYear)) : "n.c."}</td>
+                          <td>{formatPercent(item.legacyShare)}</td>
+                          <td>{formatPercent(item.recentWorksShare)}</td>
+                          <td>{formatPercent(item.transportAccessShare)}</td>
+                          <td>{formatPercent(item.accessibilityShare)}</td>
+                          <td>{formatInteger(item.schoolUsageCount)}</td>
+                          <td>{formatPercent(item.schoolOperationalShare)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="subtle-empty">Aucun EPCI ne dispose de bassins enrichis sur le périmètre actif.</p>
+              )}
+          </section>
+            </>
+          ) : null}
+
+          {overviewView === "school" ? (
+            <>
+          <section className="panel table-panel overview-section-panel">
+            <div className="panel-heading">
+              <div>
+                <span className="eyebrow">Demande scolaire</span>
+                <h2>Pression scolaire potentielle par EPCI</h2>
+              </div>
+              <p>
+                Les effectifs scolaires 2024 sont rapprochés de l'installation la plus proche pour lire la
+                densité de demande et la proximité physique du parc actuel.
+              </p>
+            </div>
+
+            <div className="investigation-summary">
+              <article className="summary-chip">
+                <span className="summary-chip-label">Établissements</span>
+                <strong>{formatInteger(overviewSchoolDemandSummary.schools_total)}</strong>
+                <small>{formatInteger(overviewSchoolDemandSummary.students_total)} élèves potentiels.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Premier / second degré</span>
+                <strong>
+                  {formatInteger(overviewSchoolDemandSummary.primary_students)} /{" "}
+                  {formatInteger(overviewSchoolDemandSummary.secondary_students)}
+                </strong>
+                <small>Effectifs 2024 retenus sur le périmètre actif.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Élèves / installation</span>
+                <strong>{formatNumber(overviewSchoolDemandSummary.students_per_installation, 1)}</strong>
+                <small>{formatInteger(overviewSchoolDemandSummary.installations_total)} installations retenues.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Distance moyenne</span>
+                <strong>{formatKilometers(overviewSchoolDemandSummary.average_distance_to_installation_km)}</strong>
+                <small>{formatPercent(overviewSchoolDemandSummary.distance_coverage_share)} des élèves géolocalisés.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Élèves &lt; 5 km</span>
+                <strong>{formatPercent(overviewSchoolDemandSummary.students_within_5km_installation_share)}</strong>
+                <small>Part des élèves géolocalisés proches d'une installation.</small>
+              </article>
+            </div>
+
+            {scopedSchoolDemandEpciRows.length > 0 ? (
+              <div className="table-scroll">
+                <table className="raw-table">
+                  <thead>
+                    <tr>
+                      <th>EPCI</th>
+                      <th>Établissements</th>
+                      <th>Élèves</th>
+                      <th>1er degré</th>
+                      <th>2nd degré</th>
+                      <th>Élèves / installation</th>
+                      <th>Distance moy.</th>
+                      <th>Élèves &lt; 5 km</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {scopedSchoolDemandEpciRows.map((item) => (
+                      <tr key={item.epci_code}>
+                        <td>
+                          <strong>{item.epci_nom}</strong>
+                          <div>{shortDepartment(item.departement ?? "")}</div>
+                        </td>
+                        <td>{formatInteger(item.schools_total)}</td>
+                        <td>{formatInteger(item.students_total)}</td>
+                        <td>{formatInteger(item.primary_students)}</td>
+                        <td>{formatInteger(item.secondary_students)}</td>
+                        <td>{formatNumber(item.students_per_installation, 1)}</td>
+                        <td>{formatKilometers(item.average_distance_to_installation_km)}</td>
+                        <td>{formatPercent(item.students_within_5km_installation_share)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="subtle-empty">{"Aucune donn\u00e9e scolaire n'est disponible sur le p\u00e9rim\u00e8tre actif."}</p>
+            )}
+          </section>
+
+            <section className="panel table-panel overview-section-panel">
+              <div className="panel-heading">
+                <div>
+                  <span className="eyebrow">{"Acc\u00e8s r\u00e9el scolaire"}</span>
+                  <h2>{"Temps voiture des \u00e9l\u00e8ves vers une installation"}</h2>
+                </div>
+                <p>{"Cette lecture compl\u00e8te la distance \u00e0 vol d'oiseau avec un temps voiture calcul\u00e9 vers l'installation la plus proche."}</p>
+              </div>
+
+              <div className="investigation-summary">
+                <article className="summary-chip">
+                  <span className="summary-chip-label">Temps moyen voiture</span>
+                  <strong>{formatMinutes(overviewSchoolDemandSummary.average_drive_time_to_installation_min)}</strong>
+                  <small>{`${formatPercent(overviewSchoolDemandSummary.drive_time_coverage_share)} des \u00e9l\u00e8ves avec temps calcul\u00e9.`}</small>
+                </article>
+                <article className="summary-chip">
+                  <span className="summary-chip-label">{"\u00c9l\u00e8ves < 15 min"}</span>
+                  <strong>{formatPercent(overviewSchoolDemandSummary.students_within_15min_installation_share)}</strong>
+                  <small>{`${formatKilometers(overviewSchoolDemandSummary.average_drive_distance_to_installation_km)} de distance routi\u00e8re moyenne.`}</small>
+                </article>
+              </div>
+
+              {scopedSchoolDemandEpciRows.length > 0 ? (
+                <div className="table-scroll">
+                  <table className="raw-table">
+                    <thead>
+                      <tr>
+                        <th>EPCI</th>
+                        <th>Temps moy. voiture</th>
+                        <th>{"Distance routi\u00e8re moy."}</th>
+                        <th>{"\u00c9l\u00e8ves < 15 min"}</th>
+                        <th>Couverture temps</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {scopedSchoolDemandEpciRows.map((item) => (
+                        <tr key={`${item.epci_code}-drive`}>
+                          <td>
+                            <strong>{item.epci_nom}</strong>
+                            <div>{shortDepartment(item.departement ?? "")}</div>
+                          </td>
+                          <td>{formatMinutes(item.average_drive_time_to_installation_min)}</td>
+                          <td>{formatKilometers(item.average_drive_distance_to_installation_km)}</td>
+                          <td>{formatPercent(item.students_within_15min_installation_share)}</td>
+                          <td>{formatPercent(item.drive_time_coverage_share)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="subtle-empty">{"Aucune mesure voiture scolaire n'est disponible sur le p\u00e9rim\u00e8tre actif."}</p>
+              )}
+            </section>
+            </>
+          ) : null}
+
+          {overviewView === "access" ? (
+            <>
+          <section className="panel overview-section-panel">
+            <div className="panel-heading">
+              <div>
+                <span className="eyebrow">Accès voiture</span>
+                <h2>Lecture d'accessibilité routière du périmètre actif</h2>
+              </div>
+              <p>
+                Les temps sont calculés depuis le centre des communes vers l'installation aquatique la plus
+                proche du socle régional. La lecture reste routière et ne couvre pas encore les transports
+                collectifs.
+              </p>
+            </div>
+
+            <div className="investigation-summary">
+              <article className="summary-chip">
+                <span className="summary-chip-label">Communes calculées</span>
+                <strong>{formatInteger(overviewAccessibilitySummary.communes_routed_total)}</strong>
+                <small>
+                  {formatPercent(
+                    safeDivide(
+                      overviewAccessibilitySummary.communes_routed_total,
+                      overviewAccessibilitySummary.communes_total,
+                    ),
+                  )}{" "}
+                  des communes du périmètre actif.
+                </small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Population couverte</span>
+                <strong>{formatInteger(overviewAccessibilitySummary.population_routed_total)}</strong>
+                <small>
+                  {formatPercent(
+                    safeDivide(
+                      overviewAccessibilitySummary.population_routed_total,
+                      overviewAccessibilitySummary.population_total,
+                    ),
+                  )}{" "}
+                  de la population du périmètre actif.
+                </small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Temps moyen</span>
+                <strong>{formatMinutes(overviewAccessibilitySummary.average_drive_time_to_installation_min)}</strong>
+                <small>{formatKilometers(overviewAccessibilitySummary.average_drive_distance_to_installation_km)} de moyenne.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Population &lt; 15 min</span>
+                <strong>{formatPercent(overviewAccessibilitySummary.population_within_15min_share)}</strong>
+                <small>{formatPercent(overviewAccessibilitySummary.population_within_20min_share)} à moins de 20 min.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Communes &lt; 15 min</span>
+                <strong>{formatPercent(overviewAccessibilitySummary.communes_within_15min_share)}</strong>
+                <small>{formatInteger(overviewAccessibilitySummary.reachable_installations_total)} installations de proximité mobilisées.</small>
+              </article>
+            </div>
+          </section>
+
+          <section className="panel notes-panel overview-section-panel">
+            <div className="panel-heading">
+              <div>
+                    <span className="eyebrow">Repères rapides</span>
+                <h2>Comment lire cette vue</h2>
+              </div>
+              <p>Trois repÃ¨res pour distinguer vitesse d'accÃ¨s moyenne et poches plus fragiles.</p>
+            </div>
+
+            <div className="message-stack">
+              {overviewAccessibilityHighlights.map((item) => (
+                <article key={item.label} className="message-item">
+                  <strong>{item.label}</strong>
+                  <div>
+                    <span>{item.value}</span>
+                    <small>{item.detail}</small>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <section className="panel table-panel overview-section-panel">
+            <div className="panel-heading">
+              <div>
+                <span className="eyebrow">Lecture territoriale</span>
+                <h2>Accessibilité voiture par EPCI</h2>
+              </div>
+              <p>
+                Le tableau agrège les temps moyens et les parts de population couvertes pour séparer les
+                EPCI vite accessibles de ceux où l'accès routier reste plus fragile.
+              </p>
+            </div>
+
+            {scopedAccessibilityEpciRows.length > 0 ? (
+              <div className="table-scroll">
+                <table className="raw-table">
+                  <thead>
+                    <tr>
+                      <th>EPCI</th>
+                      <th>Communes calculées</th>
+                      <th>Temps moyen</th>
+                      <th>Distance moyenne</th>
+                      <th>Population &lt; 10 min</th>
+                      <th>Population &lt; 15 min</th>
+                      <th>Population &lt; 20 min</th>
+                      <th>Communes &lt; 15 min</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {scopedAccessibilityEpciRows.map((item) => (
+                      <tr key={item.epci_code}>
+                        <td>
+                          <strong>{item.epci_nom}</strong>
+                          <div>{shortDepartment(item.departement ?? "")}</div>
+                        </td>
+                        <td>{`${formatInteger(item.communes_routed_total)} / ${formatInteger(item.communes_total)}`}</td>
+                        <td>{formatMinutes(item.average_drive_time_to_installation_min)}</td>
+                        <td>{formatKilometers(item.average_drive_distance_to_installation_km)}</td>
+                        <td>{formatPercent(item.population_within_10min_share)}</td>
+                        <td>{formatPercent(item.population_within_15min_share)}</td>
+                        <td>{formatPercent(item.population_within_20min_share)}</td>
+                        <td>{formatPercent(item.communes_within_15min_share)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="subtle-empty">Aucune mesure voiture n'est disponible sur le périmètre actif.</p>
+            )}
+          </section>
+            </>
+          ) : null}
+
+          {overviewView === "transit" ? (
+            <>
+              <section className="panel overview-section-panel">
+                <div className="panel-heading">
+                  <div>
+                    <span className="eyebrow">Offre TC potentielle</span>
+                    <h2>Lecture GTFS autour du périmètre actif</h2>
+                  </div>
+                  <p>
+                    Cette vue lit la proximité aux arrêts et gares des flux GTFS officiels en Hauts-de-France.
+                    Elle mesure une offre potentielle à pied, pas un temps de trajet complet porte-à-porte.
+                  </p>
+                </div>
+
+                <div className="investigation-summary">
+                  <article className="summary-chip">
+                    <span className="summary-chip-label">Arrêts ou gares actifs</span>
+                    <strong>{formatInteger(overviewTransitSummary.transit_hubs_total)}</strong>
+                    <small>Socle GTFS TER et interurbain agrégé sur un jour de semaine théorique.</small>
+                  </article>
+                  <article className="summary-chip">
+                    <span className="summary-chip-label">Distance moyenne à un arrêt</span>
+                    <strong>{formatKilometers(overviewTransitSummary.average_nearest_stop_distance_km)}</strong>
+                    <small>{formatInteger(overviewTransitSummary.communes_geolocated_total)} communes géolocalisées.</small>
+                  </article>
+                  <article className="summary-chip">
+                    <span className="summary-chip-label">Population &lt; 500 m</span>
+                    <strong>{formatPercent(overviewTransitSummary.population_within_500m_share)}</strong>
+                    <small>{formatPercent(overviewTransitSummary.population_within_1000m_share)} à moins d'1 km.</small>
+                  </article>
+                  <article className="summary-chip">
+                    <span className="summary-chip-label">Installations &lt; 500 m</span>
+                    <strong>{formatPercent(overviewTransitSummary.installations_within_500m_share)}</strong>
+                    <small>{formatPercent(overviewTransitSummary.installations_within_1000m_share)} à moins d'1 km.</small>
+                  </article>
+                  <article className="summary-chip">
+                    <span className="summary-chip-label">Élèves &lt; 500 m</span>
+                    <strong>{formatPercent(overviewTransitSummary.students_within_500m_share)}</strong>
+                    <small>{formatPercent(overviewTransitSummary.students_within_1000m_share)} à moins d'1 km d'un arrêt.</small>
+                  </article>
+                </div>
+              </section>
+
+              <section className="panel notes-panel overview-section-panel">
+                <div className="panel-heading">
+                  <div>
+                    <span className="eyebrow">Repères rapides</span>
+                    <h2>Comment lire cette vue</h2>
+                  </div>
+                  <p>Quatre repères pour distinguer présence d'arrêts proches et intensité minimale de desserte.</p>
+                </div>
+
+                <div className="message-stack">
+                  {overviewTransitHighlights.map((item) => (
+                    <article key={item.label} className="message-item">
+                      <strong>{item.label}</strong>
+                      <div>
+                        <span>{item.value}</span>
+                        <small>{item.detail}</small>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+
+              <section className="panel table-panel overview-section-panel">
+                <div className="panel-heading">
+                  <div>
+                    <span className="eyebrow">Lecture territoriale</span>
+                    <h2>Offre TC potentielle par EPCI</h2>
+                  </div>
+                  <p>
+                    Le tableau agrège la proximité aux arrêts GTFS, la couverture des installations et
+                    l'ancrage potentiel des élèves à pied autour du réseau.
+                  </p>
+                </div>
+
+                {scopedTransitEpciRows.length > 0 ? (
+                  <div className="table-scroll">
+                    <table className="raw-table">
+                      <thead>
+                        <tr>
+                          <th>EPCI</th>
+                          <th>Distance moyenne à un arrêt</th>
+                          <th>Population &lt; 500 m</th>
+                          <th>Population &lt; 1 km</th>
+                          <th>Installations &lt; 500 m</th>
+                          <th>Élèves &lt; 500 m</th>
+                          <th>Passages théoriques à 1 km</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {scopedTransitEpciRows.map((item) => (
+                          <tr key={`${item.epci_code}-transit`}>
+                            <td>
+                              <strong>{item.epci_nom}</strong>
+                              <div>{shortDepartment(item.departement ?? "")}</div>
+                            </td>
+                            <td>{formatKilometers(item.average_nearest_stop_distance_km)}</td>
+                            <td>{formatPercent(item.population_within_500m_share)}</td>
+                            <td>{formatPercent(item.population_within_1000m_share)}</td>
+                            <td>{formatPercent(item.installations_within_500m_share)}</td>
+                            <td>{formatPercent(item.students_within_500m_share)}</td>
+                            <td>{formatInteger(Math.round(item.average_weekday_trips_within_1000m))}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="subtle-empty">Aucune lecture GTFS n'est disponible sur le périmètre actif.</p>
+                )}
+              </section>
             </>
           ) : null}
         </>
@@ -2900,7 +5154,7 @@ function App() {
                 <div className="chart-wrap ranking-chart" style={{ height: `${epciChartHeight}px` }}>
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={epciRanking} layout="vertical" margin={{ top: 0, right: 18, bottom: 0, left: 0 }}>
-                      <CartesianGrid strokeDasharray="4 4" horizontal={false} stroke="#d2ddd6" />
+                      <CartesianGrid strokeDasharray="4 4" horizontal={false} stroke="#d6d6d6" />
                       <XAxis
                         type="number"
                         tickLine={false}
@@ -2921,7 +5175,7 @@ function App() {
                       <Bar
                         dataKey="value"
                         name={activeMetricOption.label}
-                        fill="#1f4e70"
+                        fill="#000091"
                         radius={[0, 10, 10, 0]}
                       />
                     </BarChart>
@@ -3009,7 +5263,7 @@ function App() {
                 <div className="chart-wrap quadrant-chart">
                   <ResponsiveContainer width="100%" height="100%">
                     <ScatterChart margin={{ top: 12, right: 20, bottom: 20, left: 10 }}>
-                      <CartesianGrid strokeDasharray="4 4" stroke="#d2ddd6" />
+                      <CartesianGrid strokeDasharray="4 4" stroke="#d6d6d6" />
                       <XAxis
                         type="number"
                         dataKey="x"
@@ -3032,8 +5286,8 @@ function App() {
                         unit="/100"
                       />
                       <ZAxis type="number" dataKey="z" range={[120, 900]} />
-                      <ReferenceLine x={QUADRANT_THRESHOLD} stroke="#9db3a4" strokeDasharray="6 6" />
-                      <ReferenceLine y={QUADRANT_THRESHOLD} stroke="#9db3a4" strokeDasharray="6 6" />
+                      <ReferenceLine x={QUADRANT_THRESHOLD} stroke="#b1b1ff" strokeDasharray="6 6" />
+                      <ReferenceLine y={QUADRANT_THRESHOLD} stroke="#b1b1ff" strokeDasharray="6 6" />
                       <Tooltip content={<QuadrantTooltip />} cursor={{ strokeDasharray: "4 4" }} />
                       <Scatter
                         data={quadrantPoints}
@@ -3286,6 +5540,74 @@ function App() {
             <div className="territory-detail-grid">
               {territoriesView === "territory" ? (
               <div className="territory-card">
+                <h3>État d'exploitation et lecture scolaire</h3>
+                <div className="fact-list">
+                  {territoryOperationalFacts.map((fact) => (
+                    <div key={fact.label} className="fact-item">
+                      <div>
+                        <span>{fact.label}</span>
+                        <small>{fact.detail}</small>
+                      </div>
+                      <strong>{fact.value}</strong>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              ) : null}
+
+              {territoriesView === "territory" ? (
+              <div className="territory-card">
+                <h3>Accessibilité voiture</h3>
+                <div className="fact-list">
+                  {territoryAccessibilityFacts.map((fact) => (
+                    <div key={fact.label} className="fact-item">
+                      <div>
+                        <span>{fact.label}</span>
+                        <small>{fact.detail}</small>
+                      </div>
+                      <strong>{fact.value}</strong>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              ) : null}
+
+              {territoriesView === "territory" ? (
+              <div className="territory-card">
+                <h3>Offre TC potentielle</h3>
+                <div className="fact-list">
+                  {territoryTransitFacts.map((fact) => (
+                    <div key={fact.label} className="fact-item">
+                      <div>
+                        <span>{fact.label}</span>
+                        <small>{fact.detail}</small>
+                      </div>
+                      <strong>{fact.value}</strong>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              ) : null}
+
+              {territoriesView === "territory" ? (
+              <div className="territory-card">
+                <h3>Pression scolaire potentielle</h3>
+                <div className="fact-list">
+                  {territorySchoolDriveFacts.map((fact) => (
+                    <div key={fact.label} className="fact-item">
+                      <div>
+                        <span>{fact.label}</span>
+                        <small>{fact.detail}</small>
+                      </div>
+                      <strong>{fact.value}</strong>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              ) : null}
+
+              {territoriesView === "territory" ? (
+              <div className="territory-card">
                 <h3>Repères territoriaux</h3>
                 <div className="fact-list">
                   {territoryFacts.map((fact) => (
@@ -3328,7 +5650,7 @@ function App() {
               {territoriesView === "comparisons" && selectedEpciCode !== "all" ? (
               <div className="territory-card territory-card-wide">
                 <h3>Comparaison directe entre deux EPCI</h3>
-                {activeEpci && comparisonEpci && territoryDirectComparisonRows.length > 0 ? (
+                {activeEpci && comparisonEpci && territoryDirectComparisonRowsWithDrive.length > 0 ? (
                   <div className="table-scroll">
                     <table className="raw-table">
                       <thead>
@@ -3340,7 +5662,7 @@ function App() {
                         </tr>
                       </thead>
                       <tbody>
-                        {territoryDirectComparisonRows.map((item) => (
+                        {territoryDirectComparisonRowsWithDrive.map((item) => (
                           <tr key={item.label}>
                             <td>{item.label}</td>
                             <td>{formatMetricByKind(item.primary, item.kind)}</td>
@@ -3817,6 +6139,434 @@ function App() {
             <p className="chart-note">{activeFacilitiesView.description}</p>
           </section>
 
+          {facilitiesView === "sheet" ? (
+        <section className="content-grid content-grid-wide">
+          <article className="panel table-panel territory-card-wide">
+            <div className="territory-header">
+              <div>
+                <span className="eyebrow">Fiche équipement</span>
+                <h2>{selectedFacilityBasin ? selectedFacilityBasin.equipement : "Choisir un équipement"}</h2>
+                <p>
+                  Lecture fine d'un bassin: dimensions, exploitation, contexte scolaire et composition du
+                  site qui l'accueille.
+                </p>
+              </div>
+
+              <div className="panel-heading-actions facility-sheet-actions">
+                <div className="compact-control territory-selector">
+                  <label htmlFor="facility-sheet-select">Équipement</label>
+                  <select
+                    id="facility-sheet-select"
+                    value={selectedFacilityBasin?.id_equipement ?? ""}
+                    onChange={(event) => setSelectedFacilityEquipmentId(event.target.value)}
+                    disabled={facilitySheetOptions.length === 0}
+                  >
+                    {facilitySheetOptions.length === 0 ? (
+                      <option value="">Aucun équipement visible</option>
+                    ) : null}
+                    {facilitySheetOptions.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {selectedFacilityBasin?.epci_code ? (
+                  <button
+                    type="button"
+                    className="rank-limit-button facility-sheet-button"
+                    onClick={() => openTerritoryCard(selectedFacilityBasin.epci_code)}
+                  >
+                    Ouvrir la fiche territoire
+                  </button>
+                ) : null}
+              </div>
+            </div>
+
+            {selectedFacilityBasin ? (
+              <>
+                <div className="investigation-summary">
+                  <article className="summary-chip">
+                    <span className="summary-chip-label">Installation</span>
+                    <strong>{selectedFacilityBasin.installation}</strong>
+                    <small>{facilitySheetOptions.find((item) => item.id === selectedFacilityBasin.id_equipement)?.meta}</small>
+                  </article>
+                  <article className="summary-chip">
+                    <span className="summary-chip-label">Profil comparable</span>
+                    <strong>{getDetailedComparableBasinProfile(selectedFacilityBasin)}</strong>
+                    <small>{formatComparableBasinMetrics(selectedFacilityBasin)}</small>
+                  </article>
+                  <article className="summary-chip">
+                    <span className="summary-chip-label">Site Data ES</span>
+                    <strong>{formatInteger(selectedFacilitySiteSummary.equipmentsTotal)} équipements</strong>
+                    <small>
+                      {formatInteger(selectedFacilitySiteSummary.familiesTotal)} familles et{" "}
+                      {formatInteger(selectedFacilitySiteSummary.activitiesTotal)} activités recensées.
+                    </small>
+                  </article>
+                  <article className="summary-chip">
+                    <span className="summary-chip-label">Mise en service</span>
+                    <strong>
+                      {selectedFacilityOperational?.year_service
+                        ? formatInteger(selectedFacilityOperational.year_service)
+                        : "n.c."}
+                    </strong>
+                    <small>Repère d'ancienneté au niveau équipement.</small>
+                  </article>
+                  <article className="summary-chip">
+                    <span className="summary-chip-label">Pairs comparables</span>
+                    <strong>{formatInteger(selectedFacilityComparablePeers.length)}</strong>
+                    <small>Dans le parc filtré actuel, hors équipement sélectionné.</small>
+                  </article>
+                </div>
+
+                <p className="chart-note">
+                  La fiche suit le périmètre départemental et les filtres actifs. La composition du site
+                  reste lue à l'échelle de l'installation pour ne pas masquer les équipements voisins.
+                </p>
+
+                <div className="signal-pill-row facility-sheet-badges" aria-label="Repères rapides équipement">
+                  {selectedFacilitySignalPills.map((item) => (
+                    <span key={item} className="signal-pill">
+                      {item}
+                    </span>
+                  ))}
+                </div>
+
+                <div className="facility-sheet-message-grid">
+                  {selectedFacilityReadingMessages.map((item) => (
+                    <article key={item.label} className="message-item">
+                      <strong>{item.label}</strong>
+                      <div>
+                        <span>{item.title}</span>
+                        <small>{item.detail}</small>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className="subtle-empty">Aucun équipement n'est disponible avec les filtres actifs.</p>
+            )}
+          </article>
+
+          {selectedFacilityBasin ? (
+            <>
+              <article className="territory-card territory-card-wide facility-sheet-section-card">
+                <span className="eyebrow">Détail</span>
+                <h3>Lire l'équipement sous quatre angles</h3>
+                <p>
+                  Identité territoriale, dimensions, exploitation et composition du site sont séparées pour
+                  éviter l'effet bloc et faciliter le repérage.
+                </p>
+              </article>
+
+              <article className="territory-card">
+                <h3>Identité et territoire</h3>
+                <div className="fact-list">
+                  {selectedFacilityIdentityFacts.map((fact) => (
+                    <div key={fact.label} className="fact-item">
+                      <div>
+                        <span>{fact.label}</span>
+                        <small>{fact.detail}</small>
+                      </div>
+                      <strong>{fact.value}</strong>
+                    </div>
+                  ))}
+                </div>
+              </article>
+
+              <article className="territory-card">
+                <h3>Dimensions et profil</h3>
+                <div className="fact-list">
+                  {selectedFacilityDimensionFacts.map((fact) => (
+                    <div key={fact.label} className="fact-item">
+                      <div>
+                        <span>{fact.label}</span>
+                        <small>{fact.detail}</small>
+                      </div>
+                      <strong>{fact.value}</strong>
+                    </div>
+                  ))}
+                </div>
+              </article>
+
+              <article className="territory-card">
+                <h3>Exploitation et accueil</h3>
+                <div className="fact-list">
+                  {selectedFacilityOperationalFacts.map((fact) => (
+                    <div key={fact.label} className="fact-item">
+                      <div>
+                        <span>{fact.label}</span>
+                        <small>{fact.detail}</small>
+                      </div>
+                      <strong>{fact.value}</strong>
+                    </div>
+                  ))}
+                </div>
+              </article>
+
+              <article className="territory-card">
+                <h3>Pression scolaire rattachée</h3>
+                {selectedFacilitySchoolDriveFacts.length > 0 ? (
+                  <div className="fact-list">
+                    {selectedFacilitySchoolDriveFacts.map((fact) => (
+                      <div key={fact.label} className="fact-item">
+                        <div>
+                          <span>{fact.label}</span>
+                          <small>{fact.detail}</small>
+                        </div>
+                        <strong>{fact.value}</strong>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="subtle-empty">Aucun rattachement scolaire n'est disponible pour ce site.</p>
+                )}
+              </article>
+
+              <article className="territory-card">
+                <h3>Offre TC potentielle</h3>
+                {selectedFacilityTransitFacts.length > 0 ? (
+                  <div className="fact-list">
+                    {selectedFacilityTransitFacts.map((fact) => (
+                      <div key={fact.label} className="fact-item">
+                        <div>
+                          <span>{fact.label}</span>
+                          <small>{fact.detail}</small>
+                        </div>
+                        <strong>{fact.value}</strong>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="subtle-empty">Aucun repère GTFS n'est disponible pour ce site.</p>
+                )}
+              </article>
+
+              <article className="territory-card">
+                <h3>Ce que contient le site</h3>
+                <div className="fact-list">
+                  <div className="fact-item">
+                    <div>
+                      <span>Équipements bassins</span>
+                      <small>Lecture du site au sens Data ES, pas seulement du bassin sélectionné.</small>
+                    </div>
+                    <strong>{formatInteger(selectedFacilitySiteSummary.bassinFamilyEquipmentsTotal)}</strong>
+                  </div>
+                  <div className="fact-item">
+                    <div>
+                      <span>Équipements hors bassin</span>
+                      <small>Permet de voir si le site combine d'autres composantes aquatiques.</small>
+                    </div>
+                    <strong>{formatInteger(selectedFacilitySiteSummary.nonBassinFamilyEquipmentsTotal)}</strong>
+                  </div>
+                  <div className="fact-item">
+                    <div>
+                      <span>Familles présentes</span>
+                      <small>Diversité interne du site observé.</small>
+                    </div>
+                    <strong>{formatInteger(selectedFacilitySiteSummary.familiesTotal)}</strong>
+                  </div>
+                  <div className="fact-item">
+                    <div>
+                      <span>Activités recensées</span>
+                      <small>Lecture par pratiques déclarées dans Data ES.</small>
+                    </div>
+                    <strong>{formatInteger(selectedFacilitySiteSummary.activitiesTotal)}</strong>
+                  </div>
+                </div>
+              </article>
+
+              <article className="panel table-panel territory-card-wide">
+                <div className="panel-heading">
+                  <div>
+                    <span className="eyebrow">Composition du site</span>
+                    <h2>Équipements recensés dans l'installation</h2>
+                  </div>
+                  <p>
+                    Cette table remet le bassin sélectionné dans son installation pour comprendre ce que le
+                    site propose vraiment.
+                  </p>
+                </div>
+
+                {selectedFacilitySiteRows.length > 0 ? (
+                  <div className="table-scroll">
+                    <table className="raw-table">
+                      <thead>
+                        <tr>
+                          <th>Équipement</th>
+                          <th>Famille</th>
+                          <th>Type</th>
+                          <th>Dimensions</th>
+                          <th>Activités</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedFacilitySiteRows.map((item) => (
+                          <tr key={item.id}>
+                            <td>
+                              <strong>{item.equipement}</strong>
+                            </td>
+                            <td>{item.family}</td>
+                            <td>{item.type}</td>
+                            <td>{item.dimensions}</td>
+                            <td>{item.activities}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="subtle-empty">Aucune ligne d'installation n'est disponible pour cet équipement.</p>
+                )}
+
+                <div className="territory-detail-grid">
+                  <div className="breakdown-section">
+                    <h3>Familles présentes</h3>
+                    <BreakdownTable
+                      rows={selectedFacilityFamilyRows}
+                      labelHeader="Famille"
+                      countHeader="Équipements"
+                      emptyMessage="Aucune famille n'est disponible pour ce site."
+                    />
+                  </div>
+                  <div className="breakdown-section">
+                    <h3>Activités du site</h3>
+                    <BreakdownTable
+                      rows={selectedFacilityActivityRows}
+                      labelHeader="Activité"
+                      countHeader="Équipements"
+                      emptyMessage="Aucune activité n'est disponible pour ce site."
+                    />
+                  </div>
+                </div>
+              </article>
+
+              <article className="panel table-panel territory-card-wide">
+                <div className="panel-heading">
+                  <div>
+                    <span className="eyebrow">Scolaire</span>
+                    <h2>Établissements rattachés à ce site</h2>
+                  </div>
+                  <p>
+                    Le rattachement suit l'installation aquatique la plus proche dans le socle bassin retenu.
+                  </p>
+                </div>
+
+                {selectedFacilityAssignedSchools.length > 0 ? (
+                  <div className="table-scroll">
+                    <table className="raw-table">
+                      <thead>
+                        <tr>
+                          <th>Établissement</th>
+                          <th>Niveau</th>
+                          <th>Commune</th>
+                          <th>Élèves</th>
+                          <th>Temps voiture</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedFacilityAssignedSchools.map((item) => (
+                          <tr key={item.uai}>
+                            <td>
+                              <strong>{item.schoolName}</strong>
+                            </td>
+                            <td>{item.schoolLevel}</td>
+                            <td>{item.commune}</td>
+                            <td>{formatInteger(item.studentsTotal)}</td>
+                            <td>
+                              {formatMinutes(item.driveTimeToInstallationMin)}
+                              {item.driveDistanceToInstallationKm !== null ? (
+                                <div>{formatKilometers(item.driveDistanceToInstallationKm)}</div>
+                              ) : null}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="subtle-empty">
+                    Aucun établissement géolocalisé n'est rattaché à cette installation dans le périmètre actif.
+                  </p>
+                )}
+              </article>
+
+              <article className="panel table-panel territory-card-wide">
+                <div className="panel-heading">
+                  <div>
+                    <span className="eyebrow">Comparables</span>
+                    <h2>Bassins équivalents dans le parc filtré</h2>
+                  </div>
+                  <p>
+                    La comparaison reste volontairement serrée : même profil comparable, puis lecture des
+                    dimensions et du contexte territorial.
+                  </p>
+                </div>
+
+                {selectedFacilityComparablePeers.length > 0 ? (
+                  <div className="table-scroll">
+                    <table className="raw-table">
+                      <thead>
+                        <tr>
+                          <th>Équipement</th>
+                          <th>Installation</th>
+                          <th>Commune</th>
+                          <th>Profil</th>
+                          <th>Dimensions</th>
+                          <th>Gestion</th>
+                          <th>Fiche</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedFacilityComparablePeers.map((item) => (
+                          <tr key={item.id_equipement}>
+                            <td>
+                              <strong>{item.equipement}</strong>
+                            </td>
+                            <td>{item.installation}</td>
+                            <td>{item.commune}</td>
+                            <td>{getDetailedComparableBasinProfile(item)}</td>
+                            <td>{formatComparableBasinMetrics(item)}</td>
+                            <td>{item.mode_gestion_calcule}</td>
+                            <td>
+                              <button
+                                type="button"
+                                className="text-button"
+                                onClick={() => openFacilitySheet(item.id_equipement)}
+                              >
+                                Voir cet équipement
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="subtle-empty">
+                    Aucun autre bassin comparable n'est visible avec les filtres actifs. Élargis les
+                    filtres pour ouvrir la comparaison.
+                  </p>
+                )}
+
+                <div className="breakdown-section">
+                    <h3>Types recensés dans l'installation</h3>
+                  <BreakdownTable
+                    rows={selectedFacilityTypeRows}
+                    labelHeader="Type"
+                    countHeader="Équipements"
+                    emptyMessage="Aucun type d'équipement n'est disponible pour ce site."
+                  />
+                </div>
+              </article>
+            </>
+          ) : null}
+        </section>
+          ) : null}
+
           {facilitiesView === "map" ? (
         <section className="content-grid content-grid-wide">
           <article className="panel map-panel">
@@ -3932,7 +6682,7 @@ function App() {
                     pathOptions={{
                       color: "#ffffff",
                       weight: 1,
-                      fillColor: MANAGEMENT_COLORS[item.mode_gestion_calcule] ?? "#56768c",
+                      fillColor: MANAGEMENT_COLORS[item.mode_gestion_calcule] ?? "#666666",
                       fillOpacity: 0.88,
                     }}
                   >
@@ -3961,6 +6711,13 @@ function App() {
                             )}
                           </div>
                         )}
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={() => openFacilitySheet(item.id_equipement)}
+                        >
+                          Ouvrir la fiche équipement
+                        </button>
                       </div>
                     </Popup>
                   </CircleMarker>
@@ -4014,6 +6771,7 @@ function App() {
               <p className="subtle-empty">Aucun équipement ne correspond aux filtres actuels.</p>
             )}
           </article>
+
         </section>
           ) : null}
 
@@ -4160,7 +6918,7 @@ function App() {
 
           {facilitiesView === "physical" ? (
         <section className="content-grid content-grid-wide">
-          <article className="panel chart-panel">
+          <article className="panel chart-panel territory-card-wide">
             <div className="panel-heading">
               <div>
                 <span className="eyebrow">Propriétés physiques</span>
@@ -4175,7 +6933,7 @@ function App() {
             <div className="chart-wrap tall">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={surfaceDistribution} margin={{ top: 4, right: 10, bottom: 24, left: 0 }}>
-                  <CartesianGrid strokeDasharray="4 4" vertical={false} stroke="#d2ddd6" />
+                    <CartesianGrid strokeDasharray="4 4" vertical={false} stroke="#d6d6d6" />
                   <XAxis
                     dataKey="label"
                     tickLine={false}
@@ -4187,7 +6945,7 @@ function App() {
                   />
                   <YAxis tickLine={false} axisLine={false} />
                   <Tooltip content={<ChartTooltip />} />
-                  <Bar dataKey="value" fill="#0f7c82" radius={[8, 8, 0, 0]} />
+                  <Bar dataKey="value" fill="#000091" radius={[8, 8, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -4236,6 +6994,180 @@ function App() {
                   <span>{formatPercent(safeDivide(item.value, filteredBasins.length))}</span>
                 </div>
               ))}
+            </div>
+          </article>
+        </section>
+          ) : null}
+
+          {facilitiesView === "operations" ? (
+        <section className="content-grid content-grid-wide">
+          <article className="panel table-panel territory-card-wide">
+            <div className="panel-heading">
+              <div>
+                <span className="eyebrow">État d'exploitation</span>
+                <h2>Ancienneté, travaux et conditions d'ouverture</h2>
+              </div>
+              <p>
+                Lecture construite sur le socle bassins filtré, enrichi par les champs d'exploitation déjà
+                présents dans le brut Data ES.
+              </p>
+            </div>
+
+            <div className="investigation-summary">
+              <article className="summary-chip">
+                <span className="summary-chip-label">Bassins enrichis</span>
+                <strong>{formatInteger(operationalSummary.equipmentCount)}</strong>
+                <small>{formatInteger(operationalSummary.installationCount)} installations sur la sélection active.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Mise en service moyenne</span>
+                <strong>
+                  {operationalSummary.averageServiceYear > 0
+                    ? formatInteger(Math.round(operationalSummary.averageServiceYear))
+                    : "n.c."}
+                </strong>
+                <small>{formatPercent(operationalSummary.yearCoverageShare)} du parc renseigne ce champ.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Parc antérieur à 2000</span>
+                <strong>{formatPercent(operationalSummary.legacyShare)}</strong>
+                <small>Part des bassins avec mise en service antérieure à 2000.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Travaux depuis 2015</span>
+                <strong>{formatPercent(operationalSummary.recentWorksShare)}</strong>
+                <small>Date ou période de gros travaux récente renseignée.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Accès transport</span>
+                <strong>{formatPercent(operationalSummary.transportAccessShare)}</strong>
+                <small>Modes de transport en commun déclarés.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Accessibilité renseignée</span>
+                <strong>{formatPercent(operationalSummary.accessibilityShare)}</strong>
+                <small>Handicap déclaré ou détail PMR / sensoriel disponible.</small>
+              </article>
+            </div>
+
+            <div className="fact-list">
+              <div className="fact-item">
+                <div>
+                  <span>Arrêté d'ouverture</span>
+                  <small>Part du parc avec ouverture au public explicitement renseignée.</small>
+                </div>
+                <strong>{formatPercent(operationalSummary.openingAuthorizedShare)}</strong>
+              </div>
+              <div className="fact-item">
+                <div>
+                  <span>Ouverture saisonnière</span>
+                  <small>Part des bassins ouverts exclusivement sur une période saisonnière.</small>
+                </div>
+                <strong>{formatPercent(operationalSummary.seasonalShare)}</strong>
+              </div>
+              <div className="fact-item">
+                <div>
+                  <span>Hors service</span>
+                  <small>Installations signalées hors service dans le brut Data ES.</small>
+                </div>
+                <strong>{formatPercent(operationalSummary.outOfServiceShare)}</strong>
+              </div>
+            </div>
+
+            <div className="breakdown-section">
+              <h3>Ancienneté du parc</h3>
+              <BreakdownTable
+                rows={serviceYearBreakdown}
+                labelHeader="Période"
+                countHeader={inventoryCountMode === "equipments" ? "Équipements" : "Installations"}
+                emptyMessage="Aucune année de mise en service n'est disponible sur le parc filtré."
+              />
+            </div>
+
+            <div className="breakdown-section">
+              <h3>Énergies déclarées</h3>
+              <BreakdownTable
+                rows={energyBreakdown}
+                labelHeader="Énergie"
+                countHeader={inventoryCountMode === "equipments" ? "Équipements" : "Installations"}
+                emptyMessage="Aucune source d'énergie n'est disponible sur la sélection active."
+              />
+            </div>
+          </article>
+
+          <article className="panel table-panel territory-card-wide">
+            <div className="panel-heading">
+              <div>
+                <span className="eyebrow">Lecture scolaire</span>
+                <h2>Conditions d'accueil scolaire du parc</h2>
+              </div>
+              <p>
+                Faute d'effectifs élèves dans le dépôt actuel, cette vue qualifie les bassins à usage
+                scolaire et les conditions matérielles qui les accompagnent.
+              </p>
+            </div>
+
+            <div className="investigation-summary">
+              <article className="summary-chip">
+                <span className="summary-chip-label">Bassins scolaires</span>
+                <strong>{formatInteger(schoolOperationalSummary.equipmentCount)}</strong>
+                <small>{formatPercent(operationalSummary.schoolUsageShare)} du parc filtré.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Sites explicites</span>
+                <strong>{formatInteger(schoolOperationalSummary.schoolExplicitCount)}</strong>
+                <small>Marquage établissement scolaire explicite dans Data ES.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">UAI renseignée</span>
+                <strong>{formatInteger(schoolOperationalSummary.uaiCount)}</strong>
+                <small>Repère très rare, donc à lire comme un signal fort plutôt qu'exhaustif.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Accès transport</span>
+                <strong>{formatPercent(schoolOperationalSummary.schoolTransportShare)}</strong>
+                <small>Part des bassins scolaires avec un mode TC déclaré.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Accessibilité renseignée</span>
+                <strong>{formatPercent(schoolOperationalSummary.schoolAccessibilityShare)}</strong>
+                <small>Part des bassins scolaires avec signal handicap / PMR / sensoriel.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Conditions favorables</span>
+                <strong>{formatPercent(schoolOperationalSummary.schoolOperationalShare)}</strong>
+                <small>Transport, accessibilité et arrêté d'ouverture présents ensemble.</small>
+              </article>
+            </div>
+
+            <div className="breakdown-section">
+              <h3>Conditions observées sur les bassins scolaires</h3>
+              <BreakdownTable
+                rows={schoolConditionRows}
+                labelHeader="Condition"
+                countHeader={inventoryCountMode === "equipments" ? "Bassins" : "Installations"}
+                emptyMessage="Aucun bassin scolaire n'est disponible sur la sélection active."
+              />
+            </div>
+
+            <div className="breakdown-section">
+              <h3>Ancienneté des bassins scolaires</h3>
+              <BreakdownTable
+                rows={schoolServiceYearBreakdown}
+                labelHeader="Période"
+                countHeader={inventoryCountMode === "equipments" ? "Bassins" : "Installations"}
+                emptyMessage="Aucune année de mise en service n'est disponible sur les bassins scolaires."
+              />
+            </div>
+
+            <div className="breakdown-section">
+              <h3>Modes de transport déclarés</h3>
+              <BreakdownTable
+                rows={transportBreakdown}
+                labelHeader="Mode"
+                countHeader={inventoryCountMode === "equipments" ? "Équipements" : "Installations"}
+                emptyMessage="Aucun mode de transport n'est renseigné sur la sélection active."
+              />
             </div>
           </article>
         </section>
@@ -4403,7 +7335,7 @@ function App() {
               <div className="chart-wrap tall">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={ageSeries} margin={{ top: 4, right: 10, bottom: 24, left: 0 }}>
-                    <CartesianGrid strokeDasharray="4 4" vertical={false} stroke="#d2ddd6" />
+                    <CartesianGrid strokeDasharray="4 4" vertical={false} stroke="#d6d6d6" />
                     <XAxis
                       dataKey="label"
                       tickLine={false}
@@ -4415,8 +7347,8 @@ function App() {
                     />
                     <YAxis tickLine={false} axisLine={false} />
                     <Tooltip content={<ChartTooltip />} />
-                    <Bar dataKey="Femmes" stackId="a" fill="#ff8f5c" radius={[6, 6, 0, 0]} />
-                    <Bar dataKey="Hommes" stackId="a" fill="#0f7c82" radius={[6, 6, 0, 0]} />
+                    <Bar dataKey="Femmes" stackId="a" fill="#b34000" radius={[6, 6, 0, 0]} />
+                    <Bar dataKey="Hommes" stackId="a" fill="#000091" radius={[6, 6, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -4483,7 +7415,7 @@ function App() {
             </article>
           </section>
 
-          <section className="panel table-panel">
+          <section className="panel table-panel overview-section-panel">
             <div className="panel-heading">
               <div>
                 <span className="eyebrow">Pression territoriale</span>
@@ -4854,7 +7786,9 @@ function ChartTooltip({
         const kind: MetricKind =
           entry.payload?.kind === "percent" ||
           entry.payload?.kind === "ratio" ||
-          entry.payload?.kind === "count"
+          entry.payload?.kind === "count" ||
+          entry.payload?.kind === "duration" ||
+          entry.payload?.kind === "distance"
             ? entry.payload.kind
             : "count";
         const entryName =
@@ -4931,9 +7865,9 @@ function QuadrantBubble({
       cx={cx}
       cy={cy}
       r={radius}
-      fill={payload.color ?? "#1f4e70"}
+                    fill={payload.color ?? "#000091"}
       fillOpacity={0.82}
-      stroke={payload.isSelected ? "#0c3240" : "rgba(255, 255, 255, 0.96)"}
+      stroke={payload.isSelected ? "#161616" : "rgba(255, 255, 255, 0.96)"}
       strokeWidth={payload.isSelected ? 3 : 1.4}
       style={{ cursor: "pointer" }}
       onClick={() => onSelect(payload.epci_code ?? "")}
@@ -5268,6 +8202,30 @@ function formatComparableBasinMetrics(item: BasinRecord) {
   return metrics.length > 0 ? metrics.join(" · ") : "Dimensions non renseignées";
 }
 
+function formatInventoryDimensions(
+  item: Pick<
+    ExtendedInventoryRecord,
+    "longueur_m" | "surface_bassin_m2" | "nb_couloirs" | "profondeur_max_m"
+  >,
+) {
+  const metrics: string[] = [];
+
+  if (typeof item.longueur_m === "number" && Number.isFinite(item.longueur_m)) {
+    metrics.push(`${formatNumber(item.longueur_m, 0)} m`);
+  }
+  if (typeof item.surface_bassin_m2 === "number" && Number.isFinite(item.surface_bassin_m2)) {
+    metrics.push(`${formatNumber(item.surface_bassin_m2, 0)} m2`);
+  }
+  if (typeof item.nb_couloirs === "number" && Number.isFinite(item.nb_couloirs)) {
+    metrics.push(`${formatNumber(item.nb_couloirs, 0)} couloirs`);
+  }
+  if (typeof item.profondeur_max_m === "number" && Number.isFinite(item.profondeur_max_m)) {
+    metrics.push(`prof. max ${formatNumber(item.profondeur_max_m, 1)} m`);
+  }
+
+  return metrics.length > 0 ? metrics.join(" - ") : "n.c.";
+}
+
 function buildInventoryPresenceRows<T extends InventoryCountableRecord>(
   items: T[],
   getLabel: (item: T) => string,
@@ -5384,6 +8342,235 @@ function buildExtendedInventorySummary(inventory: ExtendedInventoryRecord[]): In
     typesTotal: countUnique(inventory.map((item) => item.type_equipement)),
     activitiesTotal: activities.size,
   };
+}
+
+function splitPipeSeparatedValues(value: string | null | undefined) {
+  if (!value) {
+    return [];
+  }
+
+  return value
+    .split("|")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function hasTransportAccess(item: Pick<OperationalBasinRecord, "transport_access_modes">) {
+  return splitPipeSeparatedValues(item.transport_access_modes).length > 0;
+}
+
+function hasAccessibilitySupport(
+  item: Pick<OperationalBasinRecord, "handicap_access_types" | "pmr_access_detail" | "sensory_access_detail">,
+) {
+  return (
+    splitPipeSeparatedValues(item.handicap_access_types).length > 0 ||
+    Boolean(item.pmr_access_detail) ||
+    Boolean(item.sensory_access_detail)
+  );
+}
+
+function hasRecentWorks(item: Pick<OperationalBasinRecord, "last_major_works_year">) {
+  return (
+    typeof item.last_major_works_year === "number" &&
+    Number.isFinite(item.last_major_works_year) &&
+    item.last_major_works_year >= RECENT_WORKS_YEAR_THRESHOLD
+  );
+}
+
+function hasSchoolExplicitSignal(item: Pick<OperationalBasinRecord, "site_scolaire_explicit" | "uai">) {
+  return item.site_scolaire_explicit === 1 || Boolean(item.uai);
+}
+
+function hasOperationalSchoolConditions(item: OperationalBasinRecord) {
+  return item.usage_scolaires === 1 && hasTransportAccess(item) && hasAccessibilitySupport(item) && item.opening_authorized_flag === 1;
+}
+
+function buildOperationalSummary(items: OperationalBasinRecord[]): OperationalInventorySummary {
+  const serviceYears = items
+    .map((item) => item.year_service)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  const schoolItems = items.filter((item) => item.usage_scolaires === 1);
+
+  return {
+    equipmentCount: items.length,
+    installationCount: countUnique(items.map((item) => item.id_installation)),
+    averageServiceYear: average(serviceYears),
+    yearCoverageShare: safeDivide(serviceYears.length, items.length),
+    legacyShare: safeDivide(
+      items.filter(
+        (item) =>
+          typeof item.year_service === "number" &&
+          Number.isFinite(item.year_service) &&
+          item.year_service < LEGACY_SERVICE_YEAR_THRESHOLD,
+      ).length,
+      items.length,
+    ),
+    recentWorksShare: safeDivide(items.filter((item) => hasRecentWorks(item)).length, items.length),
+    transportAccessShare: safeDivide(items.filter((item) => hasTransportAccess(item)).length, items.length),
+    accessibilityShare: safeDivide(items.filter((item) => hasAccessibilitySupport(item)).length, items.length),
+    openingAuthorizedShare: safeDivide(
+      items.filter((item) => item.opening_authorized_flag === 1).length,
+      items.length,
+    ),
+    seasonalShare: safeDivide(items.filter((item) => item.seasonal_only_flag === 1).length, items.length),
+    outOfServiceShare: safeDivide(
+      items.filter((item) => item.installation_out_of_service_flag === 1).length,
+      items.length,
+    ),
+    schoolUsageCount: schoolItems.length,
+    schoolUsageShare: safeDivide(schoolItems.length, items.length),
+    schoolExplicitCount: schoolItems.filter((item) => hasSchoolExplicitSignal(item)).length,
+    uaiCount: schoolItems.filter((item) => Boolean(item.uai)).length,
+    schoolTransportShare: safeDivide(
+      schoolItems.filter((item) => hasTransportAccess(item)).length,
+      schoolItems.length,
+    ),
+    schoolAccessibilityShare: safeDivide(
+      schoolItems.filter((item) => hasAccessibilitySupport(item)).length,
+      schoolItems.length,
+    ),
+    schoolOperationalShare: safeDivide(
+      schoolItems.filter((item) => hasOperationalSchoolConditions(item)).length,
+      schoolItems.length,
+    ),
+  };
+}
+
+function buildOperationalMultiValueBreakdownRows<T extends InventoryCountableRecord>(
+  items: T[],
+  getValues: (item: T) => string[],
+  mode: InventoryCountMode,
+) {
+  const expandedItems = items.flatMap((item) =>
+    getValues(item).map((label) => ({
+      ...item,
+      label,
+    })),
+  );
+
+  return buildInventoryPresenceRows(
+    expandedItems,
+    (item) => item.label,
+    mode,
+  ).map((item) => ({
+    name: item.label,
+    value: item.count,
+    share: item.share,
+    kind: "count" as const,
+    seriesLabel: mode === "equipments" ? "Équipements" : "Installations",
+  }));
+}
+
+function buildOperationalConditionRows<T extends InventoryCountableRecord>(
+  items: T[],
+  conditions: Array<{ label: string; test: (item: T) => boolean }>,
+  mode: InventoryCountMode,
+) {
+  const total = mode === "equipments" ? items.length : countUnique(items.map((item) => item.id_installation));
+
+  return conditions.map((condition) => {
+    const matchingItems = items.filter((item) => condition.test(item));
+    const count =
+      mode === "equipments"
+        ? matchingItems.length
+        : countUnique(matchingItems.map((item) => item.id_installation));
+
+    return {
+      name: condition.label,
+      value: count,
+      share: safeDivide(count, total),
+      kind: "count" as const,
+      seriesLabel: mode === "equipments" ? "Équipements" : "Installations",
+    };
+  });
+}
+
+function buildOperationalServiceYearRows(items: OperationalBasinRecord[], mode: InventoryCountMode) {
+  const total = mode === "equipments" ? items.length : countUnique(items.map((item) => item.id_installation));
+
+  const rows: Array<{
+    name: string;
+    value: number;
+    share: number;
+    kind: "count";
+    seriesLabel: string;
+  }> = SERVICE_YEAR_BUCKETS.map((bucket) => {
+    const matchingItems = items.filter(
+      (item) =>
+        typeof item.year_service === "number" &&
+        Number.isFinite(item.year_service) &&
+        item.year_service >= bucket.min &&
+        item.year_service < bucket.max,
+    );
+    const count =
+      mode === "equipments"
+        ? matchingItems.length
+        : countUnique(matchingItems.map((item) => item.id_installation));
+
+    return {
+      name: bucket.label,
+      value: count,
+      share: safeDivide(count, total),
+      kind: "count" as const,
+      seriesLabel: mode === "equipments" ? "Équipements" : "Installations",
+    };
+  });
+
+  const missingItems = items.filter((item) => typeof item.year_service !== "number" || !Number.isFinite(item.year_service));
+  const missingCount =
+    mode === "equipments" ? missingItems.length : countUnique(missingItems.map((item) => item.id_installation));
+
+  if (missingCount > 0) {
+    rows.push({
+      name: "Non renseignée",
+      value: missingCount,
+      share: safeDivide(missingCount, total),
+      kind: "count" as const,
+      seriesLabel: mode === "equipments" ? "Équipements" : "Installations",
+    });
+  }
+
+  return rows.filter((item) => item.value > 0);
+}
+
+function buildOperationalTerritoryRows(epci: EpciRecord[], basins: OperationalBasinRecord[]): OperationalTerritoryRow[] {
+  const basinsByEpci = new Map<string, OperationalBasinRecord[]>();
+  basins.forEach((item) => {
+    const rows = basinsByEpci.get(item.epci_code) ?? [];
+    rows.push(item);
+    basinsByEpci.set(item.epci_code, rows);
+  });
+
+  return epci
+    .map((item) => {
+      const territoryBasins = basinsByEpci.get(item.epci_code) ?? [];
+      const summary = buildOperationalSummary(territoryBasins);
+
+      return {
+        epci_code: item.epci_code,
+        epci_nom: item.epci_nom,
+        departement: item.departement,
+        basins: summary.equipmentCount,
+        installations: summary.installationCount,
+        averageServiceYear: summary.averageServiceYear,
+        legacyShare: summary.legacyShare,
+        recentWorksShare: summary.recentWorksShare,
+        transportAccessShare: summary.transportAccessShare,
+        accessibilityShare: summary.accessibilityShare,
+        schoolUsageCount: summary.schoolUsageCount,
+        schoolOperationalShare: summary.schoolOperationalShare,
+      };
+    })
+    .filter((item) => item.basins > 0)
+    .sort((left, right) => {
+      if (right.schoolUsageCount !== left.schoolUsageCount) {
+        return right.schoolUsageCount - left.schoolUsageCount;
+      }
+      if (right.legacyShare !== left.legacyShare) {
+        return right.legacyShare - left.legacyShare;
+      }
+      return left.epci_nom.localeCompare(right.epci_nom, "fr");
+    });
 }
 
 function parseActivities(value: string | null | undefined) {
@@ -5658,6 +8845,293 @@ function average(values: number[]) {
   return values.reduce((total, value) => total + value, 0) / values.length;
 }
 
+function buildSchoolDemandSummary(
+  schools: SchoolEstablishmentRecord[],
+  basinsTotal: number,
+  installationsTotal: number,
+  schoolBasinsTotal: number,
+): SchoolDemandOverview {
+  const studentsTotal = sumBy(schools, "students_total");
+  const primaryStudents = sumBy(schools, "primary_students");
+  const secondaryStudents = sumBy(schools, "secondary_students");
+  const geolocatedSchools = schools.filter(
+    (item) =>
+      typeof item.latitude === "number" &&
+      Number.isFinite(item.latitude) &&
+      typeof item.longitude === "number" &&
+      Number.isFinite(item.longitude),
+  );
+  const schoolsWithDistances = schools.filter(
+    (item) =>
+      typeof item.distance_to_nearest_installation_km === "number" &&
+      Number.isFinite(item.distance_to_nearest_installation_km),
+  );
+  const studentsGeolocatedTotal = sumBy(schoolsWithDistances, "students_total");
+  const studentsWithin5Km = schoolsWithDistances
+    .filter((item) => (item.distance_to_nearest_installation_km ?? Number.POSITIVE_INFINITY) <= 5)
+    .reduce((total, item) => total + item.students_total, 0);
+  const schoolsWithDriveTimes = schools.filter(
+    (item) =>
+      typeof item.drive_time_to_nearest_installation_min === "number" &&
+      Number.isFinite(item.drive_time_to_nearest_installation_min),
+  );
+  const studentsWithDriveTimes = sumBy(schoolsWithDriveTimes, "students_total");
+  const studentsWithin15Min = schoolsWithDriveTimes
+    .filter((item) => (item.drive_time_to_nearest_installation_min ?? Number.POSITIVE_INFINITY) <= 15)
+    .reduce((total, item) => total + item.students_total, 0);
+
+  return {
+    schools_total: schools.length,
+    schools_geolocated_total: geolocatedSchools.length,
+    students_total: studentsTotal,
+    students_geolocated_total: studentsGeolocatedTotal,
+    primary_students: primaryStudents,
+    secondary_students: secondaryStudents,
+    distance_coverage_share: safeDivide(studentsGeolocatedTotal, studentsTotal),
+    drive_time_coverage_share: safeDivide(studentsWithDriveTimes, studentsTotal),
+    average_distance_to_installation_km: weightedAverageByStudents(
+      schoolsWithDistances,
+      (item) => item.distance_to_nearest_installation_km,
+    ),
+    average_drive_time_to_installation_min: weightedAverageByStudents(
+      schoolsWithDriveTimes,
+      (item) => item.drive_time_to_nearest_installation_min,
+    ),
+    average_drive_distance_to_installation_km: weightedAverageByStudents(
+      schoolsWithDriveTimes,
+      (item) => item.drive_distance_to_nearest_installation_km,
+    ),
+    average_distance_to_basin_km: weightedAverageByStudents(
+      schools.filter(
+        (item) =>
+          typeof item.distance_to_nearest_basin_km === "number" &&
+          Number.isFinite(item.distance_to_nearest_basin_km),
+      ),
+      (item) => item.distance_to_nearest_basin_km,
+    ),
+    students_within_5km_installation_share: safeDivide(studentsWithin5Km, studentsGeolocatedTotal),
+    students_within_15min_installation_share: safeDivide(studentsWithin15Min, studentsWithDriveTimes),
+    basins_total: basinsTotal,
+    installations_total: installationsTotal,
+    school_basins_total: schoolBasinsTotal,
+    students_per_basin: safeDivide(studentsTotal, basinsTotal),
+    students_per_installation: safeDivide(studentsTotal, installationsTotal),
+    students_per_school_basin: safeDivide(studentsTotal, schoolBasinsTotal),
+  };
+}
+
+function buildAccessibilitySummary(
+  communes: CommuneAccessibilityRecord[],
+  installationsTotal: number,
+): AccessibilityOverview {
+  const routedCommunes = communes.filter(
+    (item) =>
+      typeof item.drive_time_to_nearest_installation_min === "number" &&
+      Number.isFinite(item.drive_time_to_nearest_installation_min),
+  );
+  const populationTotal = sumBy(communes, "population_2023");
+  const populationRoutedTotal = sumBy(routedCommunes, "population_2023");
+
+  return {
+    communes_total: communes.length,
+    communes_routed_total: routedCommunes.length,
+    population_total: populationTotal,
+    population_routed_total: populationRoutedTotal,
+    installations_total: installationsTotal,
+    reachable_installations_total: countUnique(
+      routedCommunes.map((item) => item.nearest_installation_id),
+    ),
+    average_drive_time_to_installation_min: weightedAverageByPopulation(
+      routedCommunes,
+      (item) => item.drive_time_to_nearest_installation_min,
+    ),
+    average_drive_distance_to_installation_km: weightedAverageByPopulation(
+      routedCommunes,
+      (item) => item.drive_distance_to_nearest_installation_km,
+    ),
+    population_within_10min_share: safeDivide(
+      routedCommunes
+        .filter((item) => (item.drive_time_to_nearest_installation_min ?? Number.POSITIVE_INFINITY) <= 10)
+        .reduce((total, item) => total + item.population_2023, 0),
+      populationRoutedTotal,
+    ),
+    population_within_15min_share: safeDivide(
+      routedCommunes
+        .filter((item) => (item.drive_time_to_nearest_installation_min ?? Number.POSITIVE_INFINITY) <= 15)
+        .reduce((total, item) => total + item.population_2023, 0),
+      populationRoutedTotal,
+    ),
+    population_within_20min_share: safeDivide(
+      routedCommunes
+        .filter((item) => (item.drive_time_to_nearest_installation_min ?? Number.POSITIVE_INFINITY) <= 20)
+        .reduce((total, item) => total + item.population_2023, 0),
+      populationRoutedTotal,
+    ),
+    communes_within_10min_share: safeDivide(
+      routedCommunes.filter(
+        (item) => (item.drive_time_to_nearest_installation_min ?? Number.POSITIVE_INFINITY) <= 10,
+      ).length,
+      routedCommunes.length,
+    ),
+    communes_within_15min_share: safeDivide(
+      routedCommunes.filter(
+        (item) => (item.drive_time_to_nearest_installation_min ?? Number.POSITIVE_INFINITY) <= 15,
+      ).length,
+      routedCommunes.length,
+    ),
+    communes_within_20min_share: safeDivide(
+      routedCommunes.filter(
+        (item) => (item.drive_time_to_nearest_installation_min ?? Number.POSITIVE_INFINITY) <= 20,
+      ).length,
+      routedCommunes.length,
+    ),
+  };
+}
+
+function buildTransitSummary(
+  communes: CommuneTransitRecord[],
+  installations: InstallationTransitRecord[],
+  schools: SchoolEstablishmentRecord[],
+  transitHubsTotal: number,
+): TransitOverview {
+  const geolocatedCommunes = communes.filter(
+    (item) =>
+      typeof item.nearest_transit_distance_km === "number" &&
+      Number.isFinite(item.nearest_transit_distance_km),
+  );
+  const geolocatedInstallations = installations.filter(
+    (item) =>
+      typeof item.nearest_transit_distance_km === "number" &&
+      Number.isFinite(item.nearest_transit_distance_km),
+  );
+  const geolocatedSchools = schools.filter(
+    (item) =>
+      typeof item.nearest_transit_distance_km === "number" &&
+      Number.isFinite(item.nearest_transit_distance_km),
+  ) as Array<SchoolEstablishmentRecord & { nearest_transit_distance_km: number }>;
+  const populationTotal = sumBy(communes, "population_2023");
+  const populationGeolocatedTotal = sumBy(geolocatedCommunes, "population_2023");
+  const studentsTotal = sumBy(schools, "students_total");
+  const studentsGeolocatedTotal = sumBy(geolocatedSchools, "students_total");
+
+  return {
+    communes_total: communes.length,
+    communes_geolocated_total: geolocatedCommunes.length,
+    population_total: populationTotal,
+    population_geolocated_total: populationGeolocatedTotal,
+    transit_hubs_total: transitHubsTotal,
+    average_nearest_stop_distance_km: weightedAverageByPopulation(
+      geolocatedCommunes,
+      (item) => item.nearest_transit_distance_km,
+    ),
+    average_weekday_trips_within_1000m: weightedAverageByPopulation(
+      geolocatedCommunes,
+      (item) => item.weekday_trips_within_1000m,
+    ),
+    population_within_500m_share: safeDivide(
+      geolocatedCommunes
+        .filter((item) => (item.nearest_transit_distance_km ?? Number.POSITIVE_INFINITY) <= 0.5)
+        .reduce((total, item) => total + item.population_2023, 0),
+      populationGeolocatedTotal,
+    ),
+    population_within_1000m_share: safeDivide(
+      geolocatedCommunes
+        .filter((item) => (item.nearest_transit_distance_km ?? Number.POSITIVE_INFINITY) <= 1)
+        .reduce((total, item) => total + item.population_2023, 0),
+      populationGeolocatedTotal,
+    ),
+    communes_within_500m_share: safeDivide(
+      geolocatedCommunes.filter(
+        (item) => (item.nearest_transit_distance_km ?? Number.POSITIVE_INFINITY) <= 0.5,
+      ).length,
+      geolocatedCommunes.length,
+    ),
+    communes_within_1000m_share: safeDivide(
+      geolocatedCommunes.filter(
+        (item) => (item.nearest_transit_distance_km ?? Number.POSITIVE_INFINITY) <= 1,
+      ).length,
+      geolocatedCommunes.length,
+    ),
+    installations_total: installations.length,
+    installations_geolocated_total: geolocatedInstallations.length,
+    installations_within_500m_share: safeDivide(
+      geolocatedInstallations.filter(
+        (item) => (item.nearest_transit_distance_km ?? Number.POSITIVE_INFINITY) <= 0.5,
+      ).length,
+      geolocatedInstallations.length,
+    ),
+    installations_within_1000m_share: safeDivide(
+      geolocatedInstallations.filter(
+        (item) => (item.nearest_transit_distance_km ?? Number.POSITIVE_INFINITY) <= 1,
+      ).length,
+      geolocatedInstallations.length,
+    ),
+    schools_total: schools.length,
+    students_total: studentsTotal,
+    students_geolocated_total: studentsGeolocatedTotal,
+    average_school_nearest_stop_distance_km: weightedAverageByStudents(
+      geolocatedSchools,
+      (item) => item.nearest_transit_distance_km,
+    ),
+    students_within_500m_share: safeDivide(
+      geolocatedSchools
+        .filter((item) => (item.nearest_transit_distance_km ?? Number.POSITIVE_INFINITY) <= 0.5)
+        .reduce((total, item) => total + item.students_total, 0),
+      studentsGeolocatedTotal,
+    ),
+    students_within_1000m_share: safeDivide(
+      geolocatedSchools
+        .filter((item) => (item.nearest_transit_distance_km ?? Number.POSITIVE_INFINITY) <= 1)
+        .reduce((total, item) => total + item.students_total, 0),
+      studentsGeolocatedTotal,
+    ),
+  };
+}
+
+function weightedAverageByStudents<T extends { students_total: number }>(
+  items: T[],
+  getValue: (item: T) => number | null,
+) {
+  const totals = items.reduce(
+    (accumulator, item) => {
+      const value = getValue(item);
+      if (typeof value !== "number" || !Number.isFinite(value) || item.students_total <= 0) {
+        return accumulator;
+      }
+
+      return {
+        numerator: accumulator.numerator + value * item.students_total,
+        denominator: accumulator.denominator + item.students_total,
+      };
+    },
+    { numerator: 0, denominator: 0 },
+  );
+
+  return totals.denominator > 0 ? totals.numerator / totals.denominator : 0;
+}
+
+function weightedAverageByPopulation<T extends { population_2023: number }>(
+  items: T[],
+  getValue: (item: T) => number | null,
+) {
+  const totals = items.reduce(
+    (accumulator, item) => {
+      const value = getValue(item);
+      if (typeof value !== "number" || !Number.isFinite(value) || item.population_2023 <= 0) {
+        return accumulator;
+      }
+
+      return {
+        numerator: accumulator.numerator + value * item.population_2023,
+        denominator: accumulator.denominator + item.population_2023,
+      };
+    },
+    { numerator: 0, denominator: 0 },
+  );
+
+  return totals.denominator > 0 ? totals.numerator / totals.denominator : 0;
+}
+
 function shortDepartment(label: string) {
   const parts = label.split(" - ");
   return parts.at(-1) ?? label;
@@ -5685,6 +9159,20 @@ function formatNumber(value: number, digits: number) {
   }).format(value);
 }
 
+function formatKilometers(value: number | null | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return "n.c.";
+  }
+  return `${formatNumber(value, 1)} km`;
+}
+
+function formatMinutes(value: number | null | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return "n.c.";
+  }
+  return `${formatNumber(value, 1)} min`;
+}
+
 function formatSignedInteger(value: number) {
   if (value === 0) {
     return "0";
@@ -5706,6 +9194,12 @@ function formatMetricByKind(value: number, kind: MetricKind) {
   if (kind === "count") {
     return formatInteger(value);
   }
+  if (kind === "duration") {
+    return formatMinutes(value);
+  }
+  if (kind === "distance") {
+    return formatKilometers(value);
+  }
   return formatNumber(value, 2);
 }
 
@@ -5722,6 +9216,12 @@ function formatSignedMetricByKind(value: number, kind: MetricKind) {
   }
   if (kind === "count") {
     return formatSignedInteger(value);
+  }
+  if (kind === "duration") {
+    return `${value > 0 ? "+" : value < 0 ? "-" : ""}${formatMinutes(Math.abs(value))}`;
+  }
+  if (kind === "distance") {
+    return `${value > 0 ? "+" : value < 0 ? "-" : ""}${formatKilometers(Math.abs(value))}`;
   }
   return formatSignedNumber(value, 2);
 }

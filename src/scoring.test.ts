@@ -84,6 +84,6 @@ describe("scoring", () => {
   it("derives tone, label, and quadrant color from configured thresholds", () => {
     expect(getPriorityToneClass(72)).toBe("priority-high");
     expect(getPriorityLabel(60)).toBe("À investiguer");
-    expect(getQuadrantColor({ offerGapIndex: 0.7, pressureIndex: 0.7 })).toBe("#ff8f5c");
+    expect(getQuadrantColor({ offerGapIndex: 0.7, pressureIndex: 0.7 })).toBe("#b34000");
   });
 });
