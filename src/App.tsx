@@ -709,6 +709,20 @@ function App() {
   }, [deferredRawSearch, selectedDepartment, selectedRawSheet]);
 
   useEffect(() => {
+    setRawSearch("");
+  }, [selectedRawSheet]);
+
+  useEffect(() => {
+    const tabLabel = TAB_OPTIONS.find((t) => t.key === activeTab)?.label ?? "";
+    document.title = tabLabel ? `${tabLabel} · Panorama aquatique HDF` : "Panorama aquatique HDF";
+  }, [activeTab]);
+
+  useEffect(() => {
+    setBasinSearch("");
+    setEpciSearch("");
+  }, [activeTab]);
+
+  useEffect(() => {
     setInvestigationPage(1);
   }, [deferredEpciSearch, investigationLens, selectedDepartment]);
 
@@ -1360,6 +1374,16 @@ function App() {
   const activeEpci = territoryEpciOptions.find((item) => item.epci_code === selectedEpciCode) ?? null;
   const comparisonEpci =
     territoryEpciOptions.find((item) => item.epci_code === selectedComparisonEpciCode) ?? null;
+
+  function resetFacilitiesFilters() {
+    setManagementFilter("all");
+    setBasinUsageFilter("all");
+    setLocalityTypeFilter("all");
+    setBasinSearch("");
+  }
+
+  const hasFacilitiesFiltersActive =
+    managementFilter !== "all" || basinUsageFilter !== "all" || localityTypeFilter !== "all" || basinSearch !== "";
 
   function openTerritoryCard(epciCode: string) {
     pendingTerritoryJumpRef.current = true;
@@ -2182,6 +2206,11 @@ function App() {
   ]);
 
   const activeTabOption = TAB_OPTIONS.find((item) => item.key === activeTab) ?? TAB_OPTIONS[0];
+  const activeSubViewLabel: string | null =
+    activeTab === "overview" ? activeOverviewView.label :
+    activeTab === "territories" ? activeTerritoriesView.label :
+    activeTab === "facilities" ? activeFacilitiesView.label :
+    null;
   const epciChartHeight = Math.max(420, epciRanking.length * 40);
   const qpvChartHeight = Math.max(320, qpvFragilityChartRows.length * 42);
 
@@ -2226,7 +2255,7 @@ function App() {
           </div>
           <div className="meta-card">
             <span className="meta-label">Source</span>
-            <strong>{data.meta.source_summary}</strong>
+            <strong>Data.Sports</strong>
           </div>
           <div className="meta-card">
             <span className="meta-label">Données générées</span>
@@ -2285,12 +2314,25 @@ function App() {
         </div>
       </section>
 
+      {activeSubViewLabel !== null && (
+        <nav className="breadcrumb" aria-label="Position actuelle">
+          <span className="breadcrumb-tab">{activeTabOption.label}</span>
+          <span className="breadcrumb-sep" aria-hidden="true">›</span>
+          <span className="breadcrumb-current">{activeSubViewLabel}</span>
+        </nav>
+      )}
+
       <section className="active-filters" aria-label="Filtres actifs">
         {activeFilterPills.map((pill) => (
           <span key={pill} className="filter-pill">
             {pill}
           </span>
         ))}
+        {activeTab === "facilities" && hasFacilitiesFiltersActive && (
+          <button type="button" className="filter-reset-button" onClick={resetFacilitiesFilters}>
+            Réinitialiser les filtres
+          </button>
+        )}
       </section>
 
       {activeTab === "overview" ? (
@@ -2305,11 +2347,13 @@ function App() {
                 {"La synth\u00e8se est maintenant r\u00e9partie entre un panorama global et une lecture sociale d\u00e9di\u00e9e QPV."}
               </p>
             </div>
-            <div className="chip-row workspace-nav-row">
+            <div className="chip-row workspace-nav-row" role="tablist" aria-label="Lecture synthèse">
               {OVERVIEW_VIEW_OPTIONS.map((option) => (
                 <button
                   key={option.key}
                   type="button"
+                  role="tab"
+                  aria-selected={overviewView === option.key}
                   className={overviewView === option.key ? "chip active" : "chip"}
                   onClick={() => setOverviewView(option.key)}
                 >
@@ -2587,7 +2631,7 @@ function App() {
                               className="text-button"
                               onClick={() => openTerritoryCard(item.epci_code)}
                             >
-                              Ouvrir
+                              Voir la fiche
                             </button>
                           </td>
                         </tr>
@@ -2617,11 +2661,13 @@ function App() {
                 L'onglet est maintenant réparti en sous-vues pour éviter une page trop longue à parcourir.
               </p>
             </div>
-            <div className="chip-row territory-nav-row">
+            <div className="chip-row territory-nav-row" role="tablist" aria-label="Vue de travail territoires">
               {TERRITORIES_VIEW_OPTIONS.map((option) => (
                 <button
                   key={option.key}
                   type="button"
+                  role="tab"
+                  aria-selected={territoriesView === option.key}
                   className={territoriesView === option.key ? "chip active" : "chip"}
                   onClick={() => setTerritoriesView(option.key)}
                 >
@@ -3070,7 +3116,7 @@ function App() {
                             className="text-button"
                             onClick={() => openTerritoryCard(item.epci_code)}
                           >
-                            Ouvrir la fiche
+                            Voir la fiche territoire
                           </button>
                         </div>
                         <div className="investigation-score-column">
@@ -3754,11 +3800,13 @@ function App() {
                 physiques et tableaux sur une seule page.
               </p>
             </div>
-            <div className="chip-row workspace-nav-row">
+            <div className="chip-row workspace-nav-row" role="tablist" aria-label="Lecture équipements">
               {FACILITIES_VIEW_OPTIONS.map((option) => (
                 <button
                   key={option.key}
                   type="button"
+                  role="tab"
+                  aria-selected={facilitiesView === option.key}
                   className={facilitiesView === option.key ? "chip active" : "chip"}
                   onClick={() => setFacilitiesView(option.key)}
                 >
@@ -3860,6 +3908,16 @@ function App() {
               </button>
             </div>
 
+            <div className="map-inline-legend" aria-label="Légende de la carte">
+              {Object.entries(MANAGEMENT_COLORS).map(([mode, color]) => (
+                <span key={mode} className="map-inline-legend-item">
+                  <span className="map-inline-legend-swatch" style={{ backgroundColor: color }} />
+                  {mode}
+                </span>
+              ))}
+              <span className="map-inline-legend-hint">Ctrl + molette ou pinch pour zoomer</span>
+            </div>
+
             <div className="map-wrap">
               <MapContainer center={[50.35, 2.84]} zoom={8} scrollWheelZoom={false}>
                 <TileLayer
@@ -3890,6 +3948,19 @@ function App() {
                             ? `${formatNumber(item.surface_bassin_m2, 0)} m²`
                             : "Surface n.c."}
                         </span>
+                        {(item.usage_scolaires === 1 || item.qpv_flag === 1 || item.qpv_200m_flag === 1) && (
+                          <div className="popup-tags">
+                            {item.usage_scolaires === 1 && (
+                              <span className="popup-tag popup-tag-school">Scolaires</span>
+                            )}
+                            {item.qpv_flag === 1 && (
+                              <span className="popup-tag popup-tag-qpv">En QPV</span>
+                            )}
+                            {item.qpv_flag !== 1 && item.qpv_200m_flag === 1 && (
+                              <span className="popup-tag popup-tag-qpv">À 200 m QPV</span>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </Popup>
                   </CircleMarker>

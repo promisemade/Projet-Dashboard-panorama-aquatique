@@ -28,6 +28,8 @@ META_SOURCE_SUMMARY = (
     "les modes de gestion et les quartiers prioritaires."
 )
 
+META_SOURCE_SUMMARY = "Data.Sports"
+
 TABLE_SHEETS = {
     "departements": "02_Departements",
     "epci": "03_EPCI",
