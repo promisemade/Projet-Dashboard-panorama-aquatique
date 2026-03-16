@@ -36,6 +36,8 @@ EXPORT_DIR = ROOT / "data" / "exports"
 EXTENDED_INVENTORY_EXPORT_NAME = "equipements_sportifs_non_filtres"
 INSTALLATION_STATUS_EXPORT_NAME = "statuts_installations"
 STATUS_REVIEW_EXPORT_NAME = "controle_statuts_prioritaires"
+PROJECTS_IN_PROGRESS_FILE = ROOT / "data" / "raw" / "projets_equipements_en_cours.json"
+PROJECTS_IN_PROGRESS_EXPORT_NAME = "projets_equipements_en_cours"
 SCHOOL_ESTABLISHMENTS_EXPORT_NAME = "etablissements_scolaires_hdf"
 SCHOOL_DEMAND_OVERVIEW_EXPORT_NAME = "pression_scolaire_synthese"
 SCHOOL_DEMAND_EPCI_EXPORT_NAME = "pression_scolaire_epci"
@@ -85,6 +87,32 @@ STATUS_PRIORITY = {
     "verify": 2,
     "seasonal": 3,
     "open_probable": 4,
+}
+PROJECT_BUCKET_LABELS = {
+    "new": "Construction neuve",
+    "rehab": "Réhabilitation lourde",
+    "uncertain": "Projet très incertain",
+}
+PROJECT_BUCKET_PRIORITY = {
+    "new": 0,
+    "rehab": 1,
+    "uncertain": 2,
+}
+PROJECT_PHASE_LABELS = {
+    "works": "Travaux en cours",
+    "programming": "Programmation",
+    "procedure": "Procédure / montage",
+    "consultation": "Concertation / étude",
+    "recent_delivery": "Livré récemment",
+    "uncertain": "Trajectoire incertaine",
+}
+PROJECT_PHASE_PRIORITY = {
+    "works": 0,
+    "recent_delivery": 1,
+    "programming": 2,
+    "procedure": 3,
+    "consultation": 4,
+    "uncertain": 5,
 }
 
 TABLE_SHEETS = {
@@ -167,9 +195,11 @@ def main() -> None:
     extended_inventory, status_override_count = load_extended_inventory()
     installation_status = build_installation_status_records(extended_inventory)
     status_review_queue = build_status_review_queue(installation_status)
+    projects_in_progress = load_projects_in_progress(tables["communes"])
     tables["sources"] = augment_sources_table(
         sanitize_sources_table(tables["sources"]),
         status_override_count,
+        len(projects_in_progress),
     )
     source_labels = [
         *META_SOURCE_LABELS_BASE,
@@ -188,6 +218,7 @@ def main() -> None:
     export_additional_records(EXTENDED_INVENTORY_EXPORT_NAME, extended_inventory)
     export_additional_records(INSTALLATION_STATUS_EXPORT_NAME, installation_status)
     export_additional_records(STATUS_REVIEW_EXPORT_NAME, status_review_queue)
+    export_additional_records(PROJECTS_IN_PROGRESS_EXPORT_NAME, projects_in_progress)
     export_additional_records(
         SCHOOL_ESTABLISHMENTS_EXPORT_NAME, school_establishments
     )
@@ -248,6 +279,7 @@ def main() -> None:
         "extended_inventory": extended_inventory,
         "installation_status": installation_status,
         "status_review_queue": status_review_queue,
+        "projects_in_progress": projects_in_progress,
         "school_demand_overview": school_demand["school_demand_overview"],
         "school_establishments": school_establishments,
         "school_demand_epci": school_demand["school_demand_epci"],
@@ -279,6 +311,10 @@ def main() -> None:
             {
                 "label": "controle statuts prioritaires",
                 "path": f"data/exports/{STATUS_REVIEW_EXPORT_NAME}.csv",
+            },
+            {
+                "label": "projets equipements en cours",
+                "path": f"data/exports/{PROJECTS_IN_PROGRESS_EXPORT_NAME}.csv",
             },
             {
                 "label": "etablissements scolaires hdf",
@@ -356,6 +392,132 @@ def load_notes() -> list[dict[str, str]]:
         notes.append({"label": label, "value": value})
 
     return notes
+
+
+def load_projects_in_progress(communes_frame: pd.DataFrame) -> list[dict[str, Any]]:
+    if not PROJECTS_IN_PROGRESS_FILE.exists():
+        return []
+
+    try:
+        payload = json.loads(PROJECTS_IN_PROGRESS_FILE.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        print(f"Projects file unreadable, continuing without project overlay: {error}", file=sys.stderr)
+        return []
+
+    if not isinstance(payload, list):
+        return []
+
+    communes = frame_to_records(communes_frame)
+    commune_lookup = build_project_commune_lookup(communes)
+    commune_centers = fetch_commune_centers()
+    rows: list[dict[str, Any]] = []
+
+    for raw_row in payload:
+        if not isinstance(raw_row, dict):
+            continue
+
+        project_id = clean_identifier(raw_row.get("project_id"))
+        project_name = clean_text(raw_row.get("project_name"))
+        department_code = clean_department_code(raw_row.get("department_code"))
+        commune_reference = clean_text(raw_row.get("commune_reference"))
+        if not project_id or not project_name:
+            continue
+
+        commune_data = find_project_commune(
+            commune_lookup,
+            commune_reference,
+            department_code,
+        )
+        code_commune = clean_commune_code(commune_data.get("code_commune")) if commune_data else None
+        commune_center = commune_centers.get(code_commune) if code_commune else None
+        bucket_code = clean_text(raw_row.get("project_bucket_code")) or "new"
+        phase_code = clean_text(raw_row.get("project_phase_code")) or "programming"
+        latitude = clean_float(raw_row.get("latitude"))
+        longitude = clean_float(raw_row.get("longitude"))
+        if latitude is None or longitude is None:
+            latitude = clean_float(commune_center.get("latitude")) if commune_center else None
+            longitude = clean_float(commune_center.get("longitude")) if commune_center else None
+
+        rows.append(
+            {
+                "project_id": project_id,
+                "project_name": project_name,
+                "communes_label": clean_text(raw_row.get("communes_label")) or commune_reference or project_name,
+                "commune_reference": commune_reference,
+                "code_commune": code_commune,
+                "commune": clean_text(commune_data.get("commune")) if commune_data else commune_reference,
+                "epci_code": clean_text(commune_data.get("epci_code")) if commune_data else None,
+                "epci_nom": clean_text(commune_data.get("epci_nom")) if commune_data else None,
+                "code_departement": department_code
+                or (clean_department_code(commune_data.get("code_departement")) if commune_data else None),
+                "departement": clean_text(commune_data.get("departement")) if commune_data else None,
+                "latitude": latitude,
+                "longitude": longitude,
+                "location_precision_label": (
+                    "Repère localisé" if raw_row.get("latitude") and raw_row.get("longitude") else "Centre communal de référence"
+                )
+                if latitude is not None and longitude is not None
+                else "Localisation non disponible",
+                "project_bucket_code": bucket_code,
+                "project_bucket_label": PROJECT_BUCKET_LABELS.get(bucket_code, clean_text(raw_row.get("project_nature_label")) or "Projet"),
+                "project_nature_label": clean_text(raw_row.get("project_nature_label")),
+                "project_phase_code": phase_code,
+                "project_phase_label": PROJECT_PHASE_LABELS.get(phase_code, "Avancement non renseigné"),
+                "public_status": clean_text(raw_row.get("public_status")),
+                "opening_label": clean_text(raw_row.get("opening_label")),
+                "opening_sort_value": clean_int(raw_row.get("opening_sort_value")),
+                "project_owner": clean_text(raw_row.get("project_owner")),
+                "budget_label": clean_text(raw_row.get("budget_label")),
+                "program_summary": clean_text(raw_row.get("program_summary")),
+                "source_summary": normalize_project_source_summary(raw_row.get("source_summary")),
+            }
+        )
+
+    rows.sort(
+        key=lambda item: (
+            item.get("opening_sort_value") is None,
+            item.get("opening_sort_value") or 999999,
+            PROJECT_BUCKET_PRIORITY.get(clean_text(item.get("project_bucket_code")) or "uncertain", 99),
+            PROJECT_PHASE_PRIORITY.get(clean_text(item.get("project_phase_code")) or "uncertain", 99),
+            clean_text(item.get("project_name")) or "",
+        )
+    )
+    return rows
+
+
+def normalize_project_source_summary(value: Any) -> str | None:
+    text = clean_text(value)
+    if not text:
+        return None
+    normalized = text.replace("Â·", "·")
+    normalized = re.sub(r"^Rapport projets[^·•]*(?:·|•)\s*", "", normalized, flags=re.IGNORECASE)
+    return normalized.strip() or None
+
+
+def build_project_commune_lookup(communes: list[dict[str, Any]]) -> dict[tuple[str, str | None], dict[str, Any]]:
+    lookup: dict[tuple[str, str | None], dict[str, Any]] = {}
+    for commune in communes:
+        commune_name = clean_text(commune.get("commune"))
+        normalized_name = normalize_search_text(commune_name)
+        if not normalized_name:
+            continue
+        department_code = clean_department_code(commune.get("code_departement"))
+        lookup[(normalized_name, department_code)] = commune
+        lookup.setdefault((normalized_name, None), commune)
+    return lookup
+
+
+def find_project_commune(
+    commune_lookup: dict[tuple[str, str | None], dict[str, Any]],
+    commune_reference: str | None,
+    department_code: str | None,
+) -> dict[str, Any] | None:
+    normalized_reference = normalize_search_text(commune_reference)
+    if not normalized_reference:
+        return None
+    return commune_lookup.get((normalized_reference, department_code)) or commune_lookup.get(
+        (normalized_reference, None)
+    )
 
 
 def ensure_status_override_file() -> None:
@@ -893,7 +1055,11 @@ def sanitize_sources_table(frame: pd.DataFrame) -> pd.DataFrame:
     return cleaned
 
 
-def augment_sources_table(frame: pd.DataFrame, status_override_count: int) -> pd.DataFrame:
+def augment_sources_table(
+    frame: pd.DataFrame,
+    status_override_count: int,
+    projects_in_progress_count: int,
+) -> pd.DataFrame:
     additions_rows = [
             {
                 "jeu": "12 Établissements scolaires géolocalisés",
@@ -936,10 +1102,21 @@ def augment_sources_table(frame: pd.DataFrame, status_override_count: int) -> pd
                 "usage_principal": "offre TC potentielle autour des communes, des installations et des établissements",
             },
     ]
+    if projects_in_progress_count > 0:
+        additions_rows.append(
+            {
+                "jeu": "17 Projets aquatiques en cours",
+                "source": "veille projets 16 mars 2026",
+                "maille": "projet",
+                "millesime": "2026",
+                "filtre": "Hauts-de-France · projets répertoriés dans le rapport",
+                "usage_principal": "repérage des constructions neuves, réhabilitations lourdes et projets incertains",
+            }
+        )
     if status_override_count > 0:
         additions_rows.append(
             {
-                "jeu": "17 Statuts d'exploitation vérifiés",
+                "jeu": "18 Statuts d'exploitation vérifiés",
                 "source": "vérification manuelle locale",
                 "maille": "installation / équipement",
                 "millesime": "mise à jour locale",

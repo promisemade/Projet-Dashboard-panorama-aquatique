@@ -15,7 +15,8 @@ import {
   YAxis,
   ZAxis,
 } from "recharts";
-import { CircleMarker, MapContainer, Popup, TileLayer } from "react-leaflet";
+import { CircleMarker, MapContainer, Marker, Popup, TileLayer, useMap, useMapEvents } from "react-leaflet";
+import { divIcon, latLngBounds } from "leaflet";
 import "leaflet/dist/leaflet.css";
 import {
   INVESTIGATION_PRIORITY_WEIGHTS,
@@ -50,6 +51,9 @@ import type {
   InstallationTransitRecord,
   OperationalStatusCode,
   Overview,
+  ProjectBucketCode,
+  ProjectInProgressRecord,
+  ProjectPhaseCode,
   SchoolDemandInstallationRecord,
   SchoolDemandOverview,
   SchoolEstablishmentRecord,
@@ -90,12 +94,13 @@ type RawSheetKey =
   | "transit_epci"
   | "installation_transit"
   | "installation_status"
-  | "status_review_queue";
+  | "status_review_queue"
+  | "projects_in_progress";
 
 type DashboardTab = "overview" | "territories" | "facilities" | "licences" | "data";
 type OverviewView = "panorama" | "social" | "operations" | "school" | "access" | "transit";
 type TerritoriesView = "investigation" | "comparisons" | "territory";
-type FacilitiesView = "map" | "sheet" | "scope" | "physical" | "operations" | "inventory" | "territories";
+type FacilitiesView = "map" | "projects" | "sheet" | "scope" | "physical" | "operations" | "inventory" | "territories";
 
 interface RawSheetDefinition {
   key: RawSheetKey;
@@ -113,6 +118,7 @@ interface PreparedRawSheet extends RawSheetDefinition {
 
 type MetricKind = "count" | "ratio" | "percent" | "duration" | "distance" | "year";
 type InventoryCountMode = "equipments" | "installations";
+type FacilityOperationalStatusFilter = "all" | "open" | "closed" | "verify";
 
 interface MetricOption {
   key: MetricKey;
@@ -183,6 +189,56 @@ type OperationalBasinRecord = BasinRecord &
     | "status_override_comment"
   >;
 
+interface FacilityMapPoint {
+  kind: "point";
+  id: string;
+  displayMode: InventoryCountMode;
+  installationId: string;
+  equipmentId: string | null;
+  installation: string;
+  equipment: string | null;
+  typeLabel: string | null;
+  commune: string;
+  departement: string;
+  latitude: number;
+  longitude: number;
+  managementLabel: string;
+  operational_status_code: OperationalStatusCode;
+  operational_status_label: string;
+  operational_status_reason: string | null;
+  status_source: string | null;
+  usage_scolaires: number;
+  qpv_flag: number;
+  qpv_200m_flag: number;
+  surface_bassin_m2: number | null;
+  equipmentCount: number;
+  basinCount: number;
+}
+
+interface FacilityMapCluster {
+  kind: "cluster";
+  id: string;
+  displayMode: InventoryCountMode;
+  latitude: number;
+  longitude: number;
+  count: number;
+  managementLabel: string;
+  operational_status_code: OperationalStatusCode;
+  operational_status_label: string;
+  samplePoints: FacilityMapPoint[];
+  managementBreakdown: Array<{ label: string; count: number }>;
+  statusBreakdown: Array<{ code: OperationalStatusCode; label: string; count: number }>;
+}
+
+interface FacilityMapSearchSuggestion {
+  id: string;
+  kind: "installation" | "commune";
+  title: string;
+  detail: string;
+  queryValue: string;
+  pointId: string | null;
+}
+
 interface OperationalInventorySummary {
   equipmentCount: number;
   installationCount: number;
@@ -244,6 +300,12 @@ interface AccessibilityHighlightRow {
   label: string;
   detail: string;
   value: string;
+}
+
+interface ProjectSummaryCard {
+  label: string;
+  value: string;
+  detail: string;
 }
 
 type ComparableProfileScope =
@@ -564,13 +626,13 @@ const RAW_SHEET_DEFINITIONS: RawSheetDefinition[] = [
     getRows: (data) => toRawRows(data.installation_status),
   },
   {
-    key: "status_review_queue",
-    label: "22 Controle statuts",
-    sheetName: "Controle prioritaire",
+    key: "projects_in_progress",
+    label: "22 Projets en cours",
+    sheetName: "Veille projets",
     description:
-      "File de revue manuelle des installations a verifier en priorite avant diffusion ou interpretation locale.",
-    exportSlug: "controle_statuts_prioritaires",
-    getRows: (data) => toRawRows(data.status_review_queue),
+      "Veille manuelle des constructions neuves, réhabilitations lourdes et projets incertains repérés dans le rapport local.",
+    exportSlug: "projets_equipements_en_cours",
+    getRows: (data) => toRawRows(data.projects_in_progress),
   },
 ];
 
@@ -600,6 +662,53 @@ const MANAGEMENT_COLORS: Record<string, string> = {
   "Régie publique": "#000091",
   "Autre gestion hors DSP": "#6a6af4",
 };
+const MANAGEMENT_LEGEND_ITEMS = [
+  ...Object.entries(MANAGEMENT_COLORS).map(([label, color]) => ({ label, color })),
+  { label: "Gestion mixte", color: "#7a6f5a" },
+];
+const OPERATIONAL_STATUS_COLORS: Record<OperationalStatusCode, string> = {
+  open_probable: "#18753c",
+  temporary_closed: "#b34000",
+  closed: "#a94645",
+  seasonal: "#8f6a00",
+  verify: "#000091",
+};
+const PROJECT_BUCKET_COLORS: Record<ProjectBucketCode, string> = {
+  new: "#000091",
+  rehab: "#0063cb",
+  uncertain: "#7a7a7a",
+};
+const PROJECT_PHASE_COLORS: Record<ProjectPhaseCode, string> = {
+  works: "#b34000",
+  programming: "#000091",
+  procedure: "#6a6af4",
+  consultation: "#8f6a00",
+  recent_delivery: "#18753c",
+  uncertain: "#7a7a7a",
+};
+const PROJECT_MARKER_FILL = "#f4c542";
+const PROJECT_MARKER_STROKE = "#7a5800";
+const PROJECT_BUCKET_OPTIONS: Array<{ key: ProjectBucketCode; label: string }> = [
+  { key: "new", label: "Constructions neuves" },
+  { key: "rehab", label: "Réhabilitations lourdes" },
+  { key: "uncertain", label: "Très incertains" },
+];
+const OPERATIONAL_STATUS_LEGEND = [
+  { key: "open_probable", label: "Ouvert probable" },
+  { key: "temporary_closed", label: "Fermé temporairement / travaux" },
+  { key: "closed", label: "Fermé / hors service" },
+  { key: "seasonal", label: "Ouverture saisonnière" },
+  { key: "verify", label: "Statut à vérifier" },
+] as const;
+const FACILITY_OPERATIONAL_STATUS_FILTER_OPTIONS: Array<{
+  key: FacilityOperationalStatusFilter;
+  label: string;
+}> = [
+  { key: "all", label: "Tous statuts" },
+  { key: "open", label: "Ouverts / saisonniers" },
+  { key: "closed", label: "Fermés / travaux" },
+  { key: "verify", label: "À vérifier" },
+];
 
 const CORE_AQUATIC_TYPES = new Set([
   "Bassin sportif de natation",
@@ -903,6 +1012,11 @@ const FACILITIES_VIEW_OPTIONS: Array<{
     description: "Carte, filtres actifs et répartition immédiate du parc affiché.",
   },
   {
+    key: "projects",
+    label: "Projets en cours",
+    description: "Veille des constructions, réhabilitations lourdes et projets encore incertains repérés dans la région.",
+  },
+  {
     key: "sheet",
     label: "Fiche équipement",
     description: "Lecture fine d'un bassin, de ses dimensions, de son exploitation et du site qui l'accueille.",
@@ -945,12 +1059,19 @@ function App() {
   const [selectedDepartment, setSelectedDepartment] = useState("all");
   const [selectedEpciCode, setSelectedEpciCode] = useState("all");
   const [selectedComparisonEpciCode, setSelectedComparisonEpciCode] = useState("all");
+  const [projectSearch, setProjectSearch] = useState("");
   const [selectedMetric, setSelectedMetric] = useState<MetricKey>("bassins_total");
   const [investigationLens, setInvestigationLens] = useState<InvestigationLens>("priority");
   const [rankingLimit, setRankingLimit] = useState<(typeof RANKING_LIMIT_OPTIONS)[number]>(25);
   const [managementFilter, setManagementFilter] = useState("all");
   const [basinUsageFilter, setBasinUsageFilter] = useState("all");
   const [localityTypeFilter, setLocalityTypeFilter] = useState("all");
+  const [operationalStatusFilter, setOperationalStatusFilter] =
+    useState<FacilityOperationalStatusFilter>("all");
+  const [facilityMapZoom, setFacilityMapZoom] = useState(8);
+  const [isMapFilterPanelOpen, setIsMapFilterPanelOpen] = useState(true);
+  const [showProjectMarkers, setShowProjectMarkers] = useState(true);
+  const [selectedMapPointId, setSelectedMapPointId] = useState("");
   const [inventoryCountMode, setInventoryCountMode] = useState<InventoryCountMode>("installations");
   const [comparableProfileScope, setComparableProfileScope] = useState<ComparableProfileScope>("all");
   const [comparableBasinContext, setComparableBasinContext] = useState<ComparableBasinContext>("all");
@@ -965,7 +1086,14 @@ function App() {
 
   const deferredEpciSearch = useDeferredValue(epciSearch.trim().toLowerCase());
   const deferredBasinSearch = useDeferredValue(basinSearch.trim().toLowerCase());
+  const deferredProjectSearch = useDeferredValue(projectSearch.trim().toLowerCase());
   const deferredRawSearch = useDeferredValue(rawSearch.trim().toLowerCase());
+
+  useEffect(() => {
+    if (inventoryCountMode !== "installations" && managementFilter === "Gestion mixte") {
+      setManagementFilter("all");
+    }
+  }, [inventoryCountMode, managementFilter]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -999,6 +1127,7 @@ function App() {
           extended_inventory: Array.isArray(payload.extended_inventory) ? payload.extended_inventory : [],
           installation_status: Array.isArray(payload.installation_status) ? payload.installation_status : [],
           status_review_queue: Array.isArray(payload.status_review_queue) ? payload.status_review_queue : [],
+          projects_in_progress: Array.isArray(payload.projects_in_progress) ? payload.projects_in_progress : [],
           school_establishments: Array.isArray(payload.school_establishments)
             ? payload.school_establishments
             : [],
@@ -1118,9 +1247,58 @@ function App() {
     );
   }, [data, selectedDepartment]);
 
-  const filteredBasins = useMemo(() => {
+  const scopedExtendedInventory = useMemo(() => {
+    if (!data) {
+      return [];
+    }
+
+    return (data.extended_inventory ?? []).filter(
+      (item) => selectedDepartment === "all" || item.dep_code === selectedDepartment,
+    );
+  }, [data, selectedDepartment]);
+
+  const scopedProjects = useMemo<ProjectInProgressRecord[]>(() => {
+    if (!data) {
+      return [];
+    }
+
+    return data.projects_in_progress.filter(
+      (item) => selectedDepartment === "all" || item.code_departement === selectedDepartment,
+    );
+  }, [data, selectedDepartment]);
+
+  const filteredProjects = useMemo<ProjectInProgressRecord[]>(() => {
+    if (!deferredProjectSearch) {
+      return scopedProjects;
+    }
+
+    return scopedProjects.filter((item) =>
+      [
+        item.project_name,
+        item.communes_label,
+        item.project_owner,
+        item.project_nature_label,
+        item.public_status,
+        item.program_summary,
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(deferredProjectSearch),
+    );
+  }, [deferredProjectSearch, scopedProjects]);
+
+  const operationalInventoryByEquipmentId = useMemo(() => {
+    const map = new Map<string, ExtendedInventoryRecord>();
+    scopedExtendedInventory
+      .filter((item) => item.famille_equipement === "Bassin de natation")
+      .forEach((item) => {
+        map.set(item.id_equipement, item);
+      });
+    return map;
+  }, [scopedExtendedInventory]);
+
+  const basinsBeforeManagementFilter = useMemo(() => {
     return scopedBasins
-      .filter((item) => managementFilter === "all" || item.mode_gestion_calcule === managementFilter)
       .filter((item) => {
         if (basinUsageFilter === "school") {
           return item.usage_scolaires === 1;
@@ -1136,6 +1314,11 @@ function App() {
           (communeTypologyLookup.get(item.code_commune) ?? "Non renseigné") === localityTypeFilter,
       )
       .filter((item) => {
+        const statusCode =
+          operationalInventoryByEquipmentId.get(item.id_equipement)?.operational_status_code ?? "verify";
+        return matchesFacilityOperationalStatusFilter(statusCode, operationalStatusFilter);
+      })
+      .filter((item) => {
         if (!deferredBasinSearch) {
           return true;
         }
@@ -1148,19 +1331,38 @@ function App() {
     communeTypologyLookup,
     deferredBasinSearch,
     localityTypeFilter,
-    managementFilter,
+    operationalInventoryByEquipmentId,
+    operationalStatusFilter,
     scopedBasins,
   ]);
-
-  const scopedExtendedInventory = useMemo(() => {
-    if (!data) {
-      return [];
-    }
-
-    return (data.extended_inventory ?? []).filter(
-      (item) => selectedDepartment === "all" || item.dep_code === selectedDepartment,
+  const installationManagementLabelLookup = useMemo(() => {
+    const labelsByInstallation = new Map<string, Set<string>>();
+    basinsBeforeManagementFilter.forEach((item) => {
+      const key = item.id_installation || item.id_equipement;
+      if (!key) {
+        return;
+      }
+      const labels = labelsByInstallation.get(key) ?? new Set<string>();
+      labels.add(item.mode_gestion_calcule);
+      labelsByInstallation.set(key, labels);
+    });
+    return new Map(
+      Array.from(labelsByInstallation.entries()).map(([key, labels]) => [key, summarizeMapManagementLabel(Array.from(labels))]),
     );
-  }, [data, selectedDepartment]);
+  }, [basinsBeforeManagementFilter]);
+  const filteredBasins = useMemo(() => {
+    return basinsBeforeManagementFilter.filter((item) => {
+      if (managementFilter === "all") {
+        return true;
+      }
+      if (inventoryCountMode === "installations") {
+        const installationKey = item.id_installation || item.id_equipement;
+        const label = installationManagementLabelLookup.get(installationKey) ?? item.mode_gestion_calcule;
+        return label === managementFilter;
+      }
+      return item.mode_gestion_calcule === managementFilter;
+    });
+  }, [basinsBeforeManagementFilter, installationManagementLabelLookup, inventoryCountMode, managementFilter]);
 
   const filteredExtendedInventory = useMemo(() => {
     return scopedExtendedInventory
@@ -1170,6 +1372,7 @@ function App() {
           (communeTypologyLookup.get(item.code_commune) ??
             formatCommuneTypology(item.typologie_commune_source)) === localityTypeFilter,
       )
+      .filter((item) => matchesFacilityOperationalStatusFilter(item.operational_status_code, operationalStatusFilter))
       .filter((item) => {
         if (!deferredBasinSearch) {
           return true;
@@ -1188,17 +1391,13 @@ function App() {
           .toLowerCase()
           .includes(deferredBasinSearch);
       });
-  }, [communeTypologyLookup, deferredBasinSearch, localityTypeFilter, scopedExtendedInventory]);
-
-  const operationalInventoryByEquipmentId = useMemo(() => {
-    const map = new Map<string, ExtendedInventoryRecord>();
-    scopedExtendedInventory
-      .filter((item) => item.famille_equipement === "Bassin de natation")
-      .forEach((item) => {
-        map.set(item.id_equipement, item);
-      });
-    return map;
-  }, [scopedExtendedInventory]);
+  }, [
+    communeTypologyLookup,
+    deferredBasinSearch,
+    localityTypeFilter,
+    operationalStatusFilter,
+    scopedExtendedInventory,
+  ]);
 
   const filteredOperationalBasins = useMemo<OperationalBasinRecord[]>(
     () =>
@@ -2299,18 +2498,6 @@ function App() {
     [data, selectedDepartment],
   );
 
-  const managementBreakdown = useMemo(() => {
-    const counters = new Map<string, number>();
-    filteredBasins.forEach((item) => {
-      counters.set(item.mode_gestion_calcule, (counters.get(item.mode_gestion_calcule) ?? 0) + 1);
-    });
-    return Array.from(counters.entries()).map(([name, value]) => ({
-      name,
-      value,
-      color: MANAGEMENT_COLORS[name] ?? "#666666",
-    }));
-  }, [filteredBasins]);
-
   const comparableScopedInstallationCount = useMemo(
     () => countUnique(comparableScopedBasins.map((item) => item.id_installation)),
     [comparableScopedBasins],
@@ -2604,7 +2791,351 @@ function App() {
     [data, scopedBasins, scopedEpci],
   );
 
-  const mapPoints = useMemo(() => filteredBasins.filter(hasCoordinates), [filteredBasins]);
+  const mapSourcePoints = useMemo<FacilityMapPoint[]>(
+    () =>
+      inventoryCountMode === "installations"
+        ? buildInstallationMapPoints(filteredOperationalBasins)
+        : buildEquipmentMapPoints(filteredOperationalBasins),
+    [filteredOperationalBasins, inventoryCountMode],
+  );
+  const mapDisplayPoints = useMemo(
+    () => buildFacilityMapDisplayItems(mapSourcePoints, facilityMapZoom),
+    [facilityMapZoom, mapSourcePoints],
+  );
+  const selectedMapPoint = useMemo(
+    () => mapSourcePoints.find((item) => item.id === selectedMapPointId) ?? null,
+    [mapSourcePoints, selectedMapPointId],
+  );
+  const mapPointLabel = inventoryCountMode === "equipments" ? "équipements" : "installations";
+  const mapSearchSuggestions = useMemo<FacilityMapSearchSuggestion[]>(() => {
+    const query = basinSearch.trim().toLowerCase();
+    if (query.length < 2) {
+      return [];
+    }
+
+    const suggestions: FacilityMapSearchSuggestion[] = [];
+    const seenInstallations = new Set<string>();
+    const communeGroups = new Map<string, FacilityMapPoint[]>();
+
+    mapSourcePoints.forEach((item) => {
+      const installationKey = `${item.installation}|${item.commune}|${item.departement}`.toLowerCase();
+      const installationText = `${item.installation} ${item.commune}`.toLowerCase();
+      if (!seenInstallations.has(installationKey) && installationText.includes(query)) {
+        seenInstallations.add(installationKey);
+        suggestions.push({
+          id: `installation-${item.id}`,
+          kind: "installation",
+          title: item.installation,
+          detail: `${item.commune} · ${shortDepartment(item.departement)} · ${item.managementLabel}`,
+          queryValue: item.installation,
+          pointId: item.id,
+        });
+      }
+
+      const communeKey = `${item.commune}|${item.departement}`;
+      const rows = communeGroups.get(communeKey) ?? [];
+      rows.push(item);
+      communeGroups.set(communeKey, rows);
+    });
+
+    const communeSuggestions = Array.from(communeGroups.entries())
+      .filter(([key]) => key.toLowerCase().includes(query))
+      .map(([key, rows]) => {
+        const [commune, departement] = key.split("|");
+        return {
+          id: `commune-${key}`,
+          kind: "commune" as const,
+          title: commune,
+          detail: `${formatInteger(rows.length)} ${mapPointLabel} visibles · ${shortDepartment(departement)}`,
+          queryValue: commune,
+          pointId: null,
+        };
+      });
+
+    return [...suggestions.slice(0, 5), ...communeSuggestions.slice(0, 4)].slice(0, 8);
+  }, [basinSearch, mapPointLabel, mapSourcePoints]);
+  const mapStatusBreakdown = useMemo(
+    () =>
+      OPERATIONAL_STATUS_LEGEND.map((item) => ({
+        name: item.label,
+        value: mapSourcePoints.filter((row) => row.operational_status_code === item.key).length,
+        color: OPERATIONAL_STATUS_COLORS[item.key],
+      })).filter((item) => item.value > 0),
+    [mapSourcePoints],
+  );
+  const mapContextBreakdown = useMemo(() => {
+    const definitions = [
+      {
+        key: "school_qpv",
+        name: "Scolaire + QPV",
+        color: "#b34000",
+        matches: (item: FacilityMapPoint) =>
+          item.usage_scolaires === 1 && (item.qpv_flag === 1 || item.qpv_200m_flag === 1),
+      },
+      {
+        key: "school_only",
+        name: "Scolaire",
+        color: "#6a6af4",
+        matches: (item: FacilityMapPoint) =>
+          item.usage_scolaires === 1 && item.qpv_flag !== 1 && item.qpv_200m_flag !== 1,
+      },
+      {
+        key: "qpv_only",
+        name: "QPV / 200 m",
+        color: "#000091",
+        matches: (item: FacilityMapPoint) =>
+          item.usage_scolaires !== 1 && (item.qpv_flag === 1 || item.qpv_200m_flag === 1),
+      },
+      {
+        key: "standard",
+        name: "Sans signal",
+        color: "#7a7a7a",
+        matches: (item: FacilityMapPoint) =>
+          item.usage_scolaires !== 1 && item.qpv_flag !== 1 && item.qpv_200m_flag !== 1,
+      },
+    ] as const;
+
+    return definitions
+      .map((definition) => ({
+        name: definition.name,
+        value: mapSourcePoints.filter((item) => definition.matches(item)).length,
+        color: definition.color,
+      }))
+      .filter((item) => item.value > 0);
+  }, [mapSourcePoints]);
+  const managementBreakdown = useMemo(
+    () =>
+      Array.from(
+        mapSourcePoints.reduce((counters, item) => {
+          counters.set(item.managementLabel, (counters.get(item.managementLabel) ?? 0) + 1);
+          return counters;
+        }, new Map<string, number>()).entries(),
+      )
+        .map(([label, count]) => ({
+          name: label,
+          value: count,
+          color: getManagementColor(label),
+        }))
+        .sort((left, right) => right.value - left.value),
+    [mapSourcePoints],
+  );
+  const mapPanelFilterPills = useMemo(() => {
+    const pills = [inventoryCountMode === "equipments" ? "Maille : équipements" : "Maille : installations"];
+    if (managementFilter !== "all") {
+      pills.push(`Gestion : ${managementFilter}`);
+    }
+    if (operationalStatusFilter !== "all") {
+      pills.push(`Statut : ${getFacilityOperationalStatusFilterLabel(operationalStatusFilter)}`);
+    }
+    if (basinUsageFilter === "school") {
+      pills.push("Contexte : scolaire");
+    }
+    if (basinUsageFilter === "qpv") {
+      pills.push("Contexte : QPV ou 200 m");
+    }
+    if (localityTypeFilter !== "all") {
+      pills.push(`Typologie : ${localityTypeFilter}`);
+    }
+    if (basinSearch) {
+      pills.push(`Recherche : ${basinSearch}`);
+    }
+    if (!showProjectMarkers) {
+      pills.push("Projets en cours : masqu\u00e9s");
+    }
+    return pills;
+  }, [
+    basinSearch,
+    basinUsageFilter,
+    inventoryCountMode,
+    localityTypeFilter,
+    managementFilter,
+    operationalStatusFilter,
+    showProjectMarkers,
+  ]);
+  const mapCustomFilterCount = useMemo(() => {
+    let count = 0;
+    if (inventoryCountMode !== "installations") {
+      count += 1;
+    }
+    if (managementFilter !== "all") {
+      count += 1;
+    }
+    if (operationalStatusFilter !== "all") {
+      count += 1;
+    }
+    if (basinUsageFilter !== "all") {
+      count += 1;
+    }
+    if (localityTypeFilter !== "all") {
+      count += 1;
+    }
+    if (basinSearch) {
+      count += 1;
+    }
+    if (!showProjectMarkers) {
+      count += 1;
+    }
+    return count;
+  }, [
+    basinSearch,
+    basinUsageFilter,
+    inventoryCountMode,
+    localityTypeFilter,
+    managementFilter,
+    operationalStatusFilter,
+    showProjectMarkers,
+  ]);
+  const mapDisplaySummary = useMemo(() => {
+    const clusterCount = mapDisplayPoints.filter((item) => item.kind === "cluster").length;
+    const individualCount = mapDisplayPoints.length - clusterCount;
+    const closedCount = mapSourcePoints.filter(
+      (item) => item.operational_status_code === "closed" || item.operational_status_code === "temporary_closed",
+    ).length;
+    const verifyCount = mapSourcePoints.filter((item) => item.operational_status_code === "verify").length;
+    return {
+      clusterCount,
+      individualCount,
+      closedCount,
+      verifyCount,
+    };
+  }, [mapDisplayPoints, mapSourcePoints]);
+  const mapStatusLegendItems = useMemo(
+    () =>
+      OPERATIONAL_STATUS_LEGEND.map((item) => ({
+        ...item,
+        color: OPERATIONAL_STATUS_COLORS[item.key],
+        count: mapSourcePoints.filter((row) => row.operational_status_code === item.key).length,
+      })).filter((item) => item.count > 0),
+    [mapSourcePoints],
+  );
+  const mapManagementFilterOptions = useMemo(
+    () =>
+      inventoryCountMode === "installations"
+        ? [...Object.keys(MANAGEMENT_COLORS), "Gestion mixte"]
+        : Object.keys(MANAGEMENT_COLORS),
+    [inventoryCountMode],
+  );
+  const geolocatedProjects = useMemo(
+    () =>
+      filteredProjects.filter(
+        (item) => typeof item.latitude === "number" && typeof item.longitude === "number",
+      ),
+    [filteredProjects],
+  );
+  const visibleProjectMarkers = showProjectMarkers ? geolocatedProjects : [];
+  const projectBucketBreakdown = useMemo(
+    () =>
+      PROJECT_BUCKET_OPTIONS.map((item) => ({
+        name: item.label,
+        value: filteredProjects.filter((row) => row.project_bucket_code === item.key).length,
+        color: PROJECT_BUCKET_COLORS[item.key],
+      })).filter((item) => item.value > 0),
+    [filteredProjects],
+  );
+  const projectPhaseBreakdown = useMemo(
+    () =>
+      (
+        [
+          { key: "works", label: "Travaux en cours" },
+          { key: "programming", label: "Programmation" },
+          { key: "procedure", label: "Procédure / montage" },
+          { key: "consultation", label: "Concertation / étude" },
+          { key: "recent_delivery", label: "Livré récemment" },
+          { key: "uncertain", label: "Trajectoire incertaine" },
+        ] as const
+      )
+        .map((item) => ({
+          name: item.label,
+          value: filteredProjects.filter((row) => row.project_phase_code === item.key).length,
+          color: PROJECT_PHASE_COLORS[item.key],
+        }))
+        .filter((item) => item.value > 0),
+    [filteredProjects],
+  );
+  const projectHorizonBreakdown = useMemo(() => {
+    const rows = [
+      {
+        name: "Livrés / imminents",
+        value: filteredProjects.filter(
+          (item) =>
+            item.project_phase_code === "recent_delivery" ||
+            (typeof item.opening_sort_value === "number" && item.opening_sort_value <= 202612),
+        ).length,
+        color: "#18753c",
+      },
+      {
+        name: "Horizon 2027-2028",
+        value: filteredProjects.filter(
+          (item) =>
+            typeof item.opening_sort_value === "number" &&
+            item.opening_sort_value >= 202701 &&
+            item.opening_sort_value <= 202812,
+        ).length,
+        color: "#000091",
+      },
+      {
+        name: "2029 et après",
+        value: filteredProjects.filter(
+          (item) => typeof item.opening_sort_value === "number" && item.opening_sort_value >= 202901,
+        ).length,
+        color: "#6a6af4",
+      },
+      {
+        name: "Échéance non précisée",
+        value: filteredProjects.filter((item) => item.opening_sort_value === null).length,
+        color: "#7a7a7a",
+      },
+    ];
+    return rows.filter((item) => item.value > 0);
+  }, [filteredProjects]);
+  const projectSummaryCards = useMemo<ProjectSummaryCard[]>(
+    () => [
+      {
+        label: "Projets repérés",
+        value: formatInteger(filteredProjects.length),
+        detail: `${formatInteger(geolocatedProjects.length)} repères cartographiques disponibles.`,
+      },
+      {
+        label: "Constructions neuves",
+        value: formatInteger(filteredProjects.filter((item) => item.project_bucket_code === "new").length),
+        detail: "Nouveaux équipements ou centres aquatiques annoncés.",
+      },
+      {
+        label: "Réhabilitations lourdes",
+        value: formatInteger(filteredProjects.filter((item) => item.project_bucket_code === "rehab").length),
+        detail: "Opérations qui transforment fortement l'offre existante.",
+      },
+      {
+        label: "Échéance proche",
+        value: formatInteger(
+          filteredProjects.filter(
+            (item) =>
+              item.project_phase_code === "recent_delivery" ||
+              (typeof item.opening_sort_value === "number" && item.opening_sort_value <= 202712),
+          ).length,
+        ),
+        detail: "Livraisons, réouvertures ou ouvertures attendues à court terme.",
+      },
+    ],
+    [filteredProjects, geolocatedProjects.length],
+  );
+
+  useEffect(() => {
+    if (selectedMapPointId === "") {
+      return;
+    }
+    if (!mapSourcePoints.some((item) => item.id === selectedMapPointId)) {
+      setSelectedMapPointId("");
+    }
+  }, [mapSourcePoints, selectedMapPointId]);
+
+  useEffect(() => {
+    if (!deferredBasinSearch || mapSourcePoints.length !== 1) {
+      return;
+    }
+    setSelectedMapPointId((current) => (current === mapSourcePoints[0].id ? current : mapSourcePoints[0].id));
+  }, [deferredBasinSearch, mapSourcePoints]);
+
   const topPressureCommunes = useMemo(
     () => buildPressureCommunes(filteredCommunes),
     [filteredCommunes],
@@ -2726,16 +3257,35 @@ function App() {
     setManagementFilter("all");
     setBasinUsageFilter("all");
     setLocalityTypeFilter("all");
+    setOperationalStatusFilter("all");
     setBasinSearch("");
+    setShowProjectMarkers(true);
   }
 
   const hasFacilitiesFiltersActive =
-    managementFilter !== "all" || basinUsageFilter !== "all" || localityTypeFilter !== "all" || basinSearch !== "";
+    managementFilter !== "all" ||
+    basinUsageFilter !== "all" ||
+    localityTypeFilter !== "all" ||
+    operationalStatusFilter !== "all" ||
+    basinSearch !== "";
 
   function openFacilitySheet(equipmentId: string) {
     setActiveTab("facilities");
     setFacilitiesView("sheet");
     setSelectedFacilityEquipmentId(equipmentId);
+  }
+
+  function openProjectsView(initialSearch?: string) {
+    setActiveTab("facilities");
+    setFacilitiesView("projects");
+    if (initialSearch) {
+      setProjectSearch(initialSearch);
+    }
+  }
+
+  function applyMapSearchSuggestion(suggestion: FacilityMapSearchSuggestion) {
+    setBasinSearch(suggestion.queryValue);
+    setSelectedMapPointId(suggestion.pointId ?? "");
   }
 
   function openTerritoryCard(epciCode: string) {
@@ -4052,6 +4602,9 @@ function App() {
       if (managementFilter !== "all") {
         pills.push(`Gestion : ${managementFilter}`);
       }
+      if (operationalStatusFilter !== "all") {
+        pills.push(`Statut : ${getFacilityOperationalStatusFilterLabel(operationalStatusFilter)}`);
+      }
       if (basinUsageFilter === "school") {
         pills.push("Usage : scolaires");
       }
@@ -4086,6 +4639,7 @@ function App() {
     inventoryCountMode,
     localityTypeFilter,
     managementFilter,
+    operationalStatusFilter,
     rawSearch,
     selectedDepartment,
     selectedComparisonEpciCode,
@@ -4894,7 +5448,7 @@ function App() {
                     <span className="eyebrow">Repères rapides</span>
                 <h2>Comment lire cette vue</h2>
               </div>
-              <p>Trois repÃ¨res pour distinguer vitesse d'accÃ¨s moyenne et poches plus fragiles.</p>
+              <p>Trois rep?res pour distinguer vitesse d'acc?s moyenne et poches plus fragiles.</p>
             </div>
 
             <div className="message-stack">
@@ -6747,13 +7301,16 @@ function App() {
 
           {facilitiesView === "map" ? (
         <section className="content-grid content-grid-wide">
-          <article className="panel map-panel">
+          <article className="panel map-panel territory-card-wide">
             <div className="panel-heading">
               <div>
                 <span className="eyebrow">Cartographie équipements</span>
                 <h2>Localisation des équipements aquatiques</h2>
               </div>
-              <p>{formatInteger(mapPoints.length)} points affichés après filtres.</p>
+              <p>
+                {formatInteger(mapDisplayPoints.length)} repères visibles à ce zoom pour{" "}
+                {formatInteger(mapSourcePoints.length)} {mapPointLabel} après filtres.
+              </p>
             </div>
 
             <div className="panel-heading-actions">
@@ -6766,41 +7323,72 @@ function App() {
                   value={basinSearch}
                   onChange={(event) => setBasinSearch(event.target.value)}
                 />
+                {mapSearchSuggestions.length > 0 ? (
+                  <div className="map-search-suggestions" role="listbox" aria-label="Suggestions cartographiques">
+                    {mapSearchSuggestions.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className="map-search-suggestion"
+                        onClick={() => applyMapSearchSuggestion(item)}
+                      >
+                        <span className="map-search-suggestion-copy">
+                          <strong>{item.title}</strong>
+                          <small>{item.detail}</small>
+                        </span>
+                        <span className="map-search-suggestion-kind">
+                          {item.kind === "commune" ? "Commune" : "Site"}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
               </div>
 
-              <div className="compact-control">
-                <label htmlFor="locality-type-filter">Typologie communale</label>
-                <select
-                  id="locality-type-filter"
-                  value={localityTypeFilter}
-                  onChange={(event) => setLocalityTypeFilter(event.target.value)}
-                >
-                  <option value="all">Toutes typologies</option>
-                  {availableLocalityTypes.map((item) => (
-                    <option key={item} value={item}>
-                      {item}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="compact-control">
-                <label htmlFor="facility-count-mode">Compter en</label>
-                <select
-                  id="facility-count-mode"
-                  value={inventoryCountMode}
-                  onChange={(event) => setInventoryCountMode(event.target.value as InventoryCountMode)}
-                >
-                  <option value="equipments">Équipements</option>
-                  <option value="installations">Installations</option>
-                </select>
-              </div>
             </div>
 
             <p className="chart-note">
-              Le mode de comptage agit sur les profils, les types et les activités. La carte reste à la
-              maille équipement.
+              Le mode de comptage agit aussi sur la carte : lecture par équipement ou par installation.
+              Les repères se regroupent automatiquement aux petits zooms. Les projets en cours
+              restent lus comme une surcouche distincte.
             </p>
+
+            <div className="map-summary-grid">
+              <article className="map-summary-card">
+                <span className="map-summary-label">Maille affichée</span>
+                <strong>{inventoryCountMode === "equipments" ? "Équipements" : "Installations"}</strong>
+                <small>{formatInteger(mapSourcePoints.length)} éléments après filtres.</small>
+              </article>
+              <article className="map-summary-card">
+                <span className="map-summary-label">Repères à ce zoom</span>
+                <strong>{formatInteger(mapDisplayPoints.length)}</strong>
+                <small>
+                  {formatInteger(mapDisplaySummary.individualCount)} repères directs
+                  {mapDisplaySummary.clusterCount > 0
+                    ? ` · ${formatInteger(mapDisplaySummary.clusterCount)} regroupements`
+                    : ""}
+                </small>
+              </article>
+              <article className="map-summary-card">
+                <span className="map-summary-label">Fermés / travaux</span>
+                <strong>{formatInteger(mapDisplaySummary.closedCount)}</strong>
+                <small>Lecture consolidée sur le périmètre visible.</small>
+              </article>
+              <article className="map-summary-card">
+                <span className="map-summary-label">À vérifier</span>
+                <strong>{formatInteger(mapDisplaySummary.verifyCount)}</strong>
+                <small>Cas à confirmer avant diffusion locale.</small>
+              </article>
+              <article className="map-summary-card">
+                <span className="map-summary-label">Projets en cours</span>
+                <strong>{formatInteger(geolocatedProjects.length)}</strong>
+                <small>
+                  {showProjectMarkers
+                    ? "Rep\u00e8res affich\u00e9s sur la carte."
+                    : "Surcouche masqu\u00e9e."}
+                </small>
+              </article>
+            </div>
 
             <div className="chip-row">
               <button
@@ -6810,7 +7398,7 @@ function App() {
               >
                 Toutes gestions
               </button>
-              {Object.keys(MANAGEMENT_COLORS).map((mode) => (
+              {mapManagementFilterOptions.map((mode) => (
                 <button
                   key={mode}
                   type="button"
@@ -6834,122 +7422,726 @@ function App() {
               >
                 QPV ou 200 m
               </button>
+              {FACILITY_OPERATIONAL_STATUS_FILTER_OPTIONS.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  className={operationalStatusFilter === item.key ? "chip active" : "chip"}
+                  onClick={() => setOperationalStatusFilter(item.key)}
+                >
+                  {item.label}
+                </button>
+              ))}
             </div>
 
-            <div className="map-inline-legend" aria-label="Légende de la carte">
-              {Object.entries(MANAGEMENT_COLORS).map(([mode, color]) => (
-                <span key={mode} className="map-inline-legend-item">
-                  <span className="map-inline-legend-swatch" style={{ backgroundColor: color }} />
-                  {mode}
-                </span>
-              ))}
+            <div className={isMapFilterPanelOpen ? "map-layout" : "map-layout map-layout-collapsed"}>
+              <aside
+                className={
+                  isMapFilterPanelOpen ? "map-filter-panel" : "map-filter-panel map-filter-panel-collapsed"
+                }
+              >
+                {isMapFilterPanelOpen ? (
+                  <>
+                    <div className="map-filter-panel-header">
+                      <div>
+                        <span className="eyebrow">Filtres carte</span>
+                        <h3>Lecture rapide</h3>
+                        <p>Réglages visuels dédiés à la carte et à son aperçu local.</p>
+                      </div>
+                      <button
+                        type="button"
+                        className="text-button"
+                        onClick={() => setIsMapFilterPanelOpen(false)}
+                      >
+                        Replier
+                      </button>
+                    </div>
+
+                    <div className="sheet-chip-row map-filter-pill-row">
+                      {mapPanelFilterPills.map((pill) => (
+                        <span key={pill} className="sheet-chip">
+                          {pill}
+                        </span>
+                      ))}
+                    </div>
+
+                    <div className="map-filter-section">
+                      <span className="map-filter-section-label">Maille</span>
+                      <div className="chip-row compact-chip-row">
+                        <button
+                          type="button"
+                          className={inventoryCountMode === "installations" ? "chip active" : "chip"}
+                          onClick={() => setInventoryCountMode("installations")}
+                        >
+                          Installations
+                        </button>
+                        <button
+                          type="button"
+                          className={inventoryCountMode === "equipments" ? "chip active" : "chip"}
+                          onClick={() => setInventoryCountMode("equipments")}
+                        >
+                          Équipements
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="map-filter-section">
+                      <span className="map-filter-section-label">Typologie</span>
+                      <div className="compact-control">
+                        <select
+                          id="map-locality-type-filter"
+                          value={localityTypeFilter}
+                          onChange={(event) => setLocalityTypeFilter(event.target.value)}
+                        >
+                          <option value="all">Toutes typologies</option>
+                          {availableLocalityTypes.map((item) => (
+                            <option key={item} value={item}>
+                              {item}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="map-filter-section">
+                      <span className="map-filter-section-label">Projets en cours</span>
+                      <div className="chip-row compact-chip-row">
+                        <button
+                          type="button"
+                          className={showProjectMarkers ? "chip active" : "chip"}
+                          onClick={() => setShowProjectMarkers(true)}
+                        >
+                          {"Affich\u00e9s"}
+                        </button>
+                        <button
+                          type="button"
+                          className={!showProjectMarkers ? "chip active" : "chip"}
+                          onClick={() => setShowProjectMarkers(false)}
+                        >
+                          {"Masqu\u00e9s"}
+                        </button>
+                      </div>
+                      <small className="chart-note">
+                        {formatInteger(geolocatedProjects.length)} projets ont un repère cartographique exploitable.
+                      </small>
+                    </div>
+
+                    <div className="map-filter-panel-footer">
+                      <span>{formatInteger(mapSourcePoints.length)} éléments</span>
+                      <button
+                        type="button"
+                        className="text-button"
+                        onClick={resetFacilitiesFilters}
+                        disabled={!hasFacilitiesFiltersActive}
+                      >
+                        Réinitialiser
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="map-filter-panel-toggle"
+                    onClick={() => setIsMapFilterPanelOpen(true)}
+                  >
+                    <strong>Filtres</strong>
+                    <small>{mapCustomFilterCount > 0 ? `${mapCustomFilterCount} actifs` : "Ouvrir"}</small>
+                  </button>
+                )}
+              </aside>
+
+              <div className="map-canvas-panel">
+
+            <div className="map-inline-legend-stack" aria-label="Légende de la carte">
+              <div className="map-inline-legend-group">
+                <span className="map-inline-legend-label">Fond : gestion</span>
+                <div className="map-inline-legend">
+                  {MANAGEMENT_LEGEND_ITEMS.map(({ label, color }) => (
+                    <span key={label} className="map-inline-legend-item">
+                      <span className="map-inline-legend-swatch" style={{ backgroundColor: color }} />
+                      {label}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <div className="map-inline-legend-group">
+                <span className="map-inline-legend-label">Contour : statut</span>
+                <div className="map-inline-legend">
+                  {mapStatusLegendItems.map((item) => (
+                    <span key={item.key} className="map-inline-legend-item">
+                      <span
+                        className="map-inline-legend-swatch map-inline-legend-swatch-outline"
+                        style={{ borderColor: item.color }}
+                      />
+                      {item.label}
+                      <strong className="map-inline-legend-count">{formatInteger(item.count)}</strong>
+                    </span>
+                  ))}
+                </div>
+              </div>
+              {geolocatedProjects.length > 0 ? (
+                <div className="map-inline-legend-group">
+                  <span className="map-inline-legend-label">Repère complémentaire</span>
+                  <div className="map-inline-legend">
+                    <span className="map-inline-legend-item">
+                      <span className="project-map-legend-swatch" />
+                      Projet en cours
+                      <strong className="map-inline-legend-count">{formatInteger(geolocatedProjects.length)}</strong>
+                    </span>
+                  </div>
+                </div>
+              ) : null}
               <span className="map-inline-legend-hint">Ctrl + molette ou pinch pour zoomer</span>
             </div>
 
             <div className="map-wrap">
               <MapContainer center={[50.35, 2.84]} zoom={8} scrollWheelZoom={false}>
+                <MapZoomTracker onZoomChange={setFacilityMapZoom} />
+                <MapAutoFocusController
+                  points={mapSourcePoints}
+                  searchTerm={deferredBasinSearch}
+                  focusedPoint={selectedMapPoint}
+                />
                 <TileLayer
                   attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
                   url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                 />
-                {mapPoints.map((item) => (
-                  <CircleMarker
-                    key={item.id_equipement}
-                    center={[item.latitude, item.longitude]}
-                    radius={4.5}
-                    pathOptions={{
-                      color: "#ffffff",
-                      weight: 1,
-                      fillColor: MANAGEMENT_COLORS[item.mode_gestion_calcule] ?? "#666666",
-                      fillOpacity: 0.88,
-                    }}
+                {mapDisplayPoints.map((item) =>
+                  item.kind === "cluster" ? (
+                    <FacilityMapClusterMarker key={item.id} cluster={item} />
+                  ) : (
+                    <CircleMarker
+                      key={item.id}
+                      center={[item.latitude, item.longitude]}
+                      radius={inventoryCountMode === "installations" ? 5.8 : 4.5}
+                      eventHandlers={{
+                        click() {
+                          setSelectedMapPointId(item.id);
+                        },
+                      }}
+                      pathOptions={{
+                        color: OPERATIONAL_STATUS_COLORS[item.operational_status_code] ?? "#666666",
+                        weight: inventoryCountMode === "installations" ? 2.8 : 2.4,
+                        fillColor: getManagementColor(item.managementLabel),
+                        fillOpacity: 0.92,
+                      }}
+                    >
+                      <Popup>
+                        <div className="popup-card popup-card-map">
+                          <div className="popup-card-header">
+                            <strong>{item.installation}</strong>
+                            <span
+                              className={`status-pill status-pill-${item.operational_status_code.replace(/_/g, "-")}`}
+                            >
+                              {item.operational_status_label}
+                            </span>
+                          </div>
+                          <div className="popup-card-meta">
+                            <span>{item.commune}</span>
+                            <span>{item.managementLabel}</span>
+                          </div>
+                          {item.displayMode === "equipments" ? (
+                            <>
+                              <div className="popup-card-primary">
+                                <span>{item.equipment}</span>
+                                <span>{item.typeLabel}</span>
+                              </div>
+                              <span className="popup-card-detail">
+                                {item.surface_bassin_m2
+                                  ? `${formatNumber(item.surface_bassin_m2, 0)} m²`
+                                  : "Surface n.c."}
+                              </span>
+                            </>
+                          ) : (
+                            <span className="popup-card-detail">
+                              {formatInteger(item.basinCount)} bassins · {formatInteger(item.equipmentCount)} équipements
+                            </span>
+                          )}
+                          {(item.usage_scolaires === 1 || item.qpv_flag === 1 || item.qpv_200m_flag === 1) && (
+                            <div className="popup-tags">
+                              {item.usage_scolaires === 1 && (
+                                <span className="popup-tag popup-tag-school">Scolaires</span>
+                              )}
+                              {item.qpv_flag === 1 && (
+                                <span className="popup-tag popup-tag-qpv">En QPV</span>
+                              )}
+                              {item.qpv_flag !== 1 && item.qpv_200m_flag === 1 && (
+                                <span className="popup-tag popup-tag-qpv">À 200 m QPV</span>
+                              )}
+                            </div>
+                          )}
+                          {item.equipmentId ? (
+                            <button
+                              type="button"
+                              className="text-button"
+                              onClick={() => openFacilitySheet(item.equipmentId)}
+                            >
+                              {item.displayMode === "installations"
+                                ? "Ouvrir un équipement du site"
+                                : "Ouvrir la fiche équipement"}
+                            </button>
+                          ) : null}
+                        </div>
+                      </Popup>
+                    </CircleMarker>
+                  ),
+                )}
+                {visibleProjectMarkers.map((project) => (
+                  <Marker
+                    key={project.project_id}
+                    position={[project.latitude as number, project.longitude as number]}
+                    icon={createProjectMarkerIcon(project.project_bucket_code)}
+                    zIndexOffset={1200}
                   >
                     <Popup>
-                      <div className="popup-card">
-                        <strong>{item.installation}</strong>
-                        <span>{item.equipement}</span>
-                        <span>{item.type_equipement}</span>
-                        <span>{item.commune}</span>
-                        <span>{item.mode_gestion_calcule}</span>
-                        <span>
-                          {item.surface_bassin_m2
-                            ? `${formatNumber(item.surface_bassin_m2, 0)} m²`
-                            : "Surface n.c."}
-                        </span>
-                        {(item.usage_scolaires === 1 || item.qpv_flag === 1 || item.qpv_200m_flag === 1) && (
-                          <div className="popup-tags">
-                            {item.usage_scolaires === 1 && (
-                              <span className="popup-tag popup-tag-school">Scolaires</span>
-                            )}
-                            {item.qpv_flag === 1 && (
-                              <span className="popup-tag popup-tag-qpv">En QPV</span>
-                            )}
-                            {item.qpv_flag !== 1 && item.qpv_200m_flag === 1 && (
-                              <span className="popup-tag popup-tag-qpv">À 200 m QPV</span>
-                            )}
-                          </div>
-                        )}
-                        <button
-                          type="button"
-                          className="text-button"
-                          onClick={() => openFacilitySheet(item.id_equipement)}
-                        >
-                          Ouvrir la fiche équipement
+                      <div className="popup-card popup-card-map popup-card-project">
+                        <div className="popup-card-header">
+                          <strong>{project.project_name}</strong>
+                          <span className={getProjectBucketPillClassName(project.project_bucket_code)}>
+                            {project.project_bucket_label}
+                          </span>
+                        </div>
+                        <div className="popup-card-meta">
+                          <span>{project.communes_label}</span>
+                          <span>{project.project_phase_label}</span>
+                        </div>
+                        {project.opening_label ? (
+                          <span className="popup-card-detail">Horizon : {project.opening_label}</span>
+                        ) : null}
+                        {project.project_owner ? (
+                          <span className="popup-card-detail">Maîtrise d’ouvrage : {project.project_owner}</span>
+                        ) : null}
+                        {project.budget_label ? (
+                          <span className="popup-card-detail">Budget : {project.budget_label}</span>
+                        ) : null}
+                        {project.program_summary ? <p className="popup-card-note">{project.program_summary}</p> : null}
+                        <div className="popup-tags">
+                          <span className="project-phase-pill">{project.project_phase_label}</span>
+                          <span className="popup-tag popup-tag-project">{project.location_precision_label}</span>
+                        </div>
+                        {project.public_status ? (
+                          <p className="popup-card-note">
+                            <strong>Statut public :</strong> {project.public_status}
+                          </p>
+                        ) : null}
+                        <button type="button" className="text-button" onClick={() => openProjectsView(project.project_name)}>
+                          Voir dans Projets en cours
                         </button>
                       </div>
                     </Popup>
-                  </CircleMarker>
+                  </Marker>
                 ))}
               </MapContainer>
             </div>
+
+            {selectedMapPoint ? (
+              <div className="map-mini-sheet" aria-live="polite">
+                <div className="map-mini-sheet-header">
+                  <div>
+                    <span className="eyebrow">Aperçu cartographique</span>
+                    <h3>
+                      {selectedMapPoint.displayMode === "installations"
+                        ? selectedMapPoint.installation
+                        : selectedMapPoint.equipment ?? selectedMapPoint.installation}
+                    </h3>
+                    <p>
+                      {selectedMapPoint.commune} · {shortDepartment(selectedMapPoint.departement)} ·{" "}
+                      {selectedMapPoint.managementLabel}
+                    </p>
+                  </div>
+                  <div className="map-mini-sheet-actions">
+                    <span className={getOperationalStatusPillClassName(selectedMapPoint.operational_status_code)}>
+                      {selectedMapPoint.operational_status_label}
+                    </span>
+                    {selectedMapPoint.equipmentId ? (
+                      <button
+                        type="button"
+                        className="text-button"
+                        onClick={() => openFacilitySheet(selectedMapPoint.equipmentId)}
+                      >
+                        {selectedMapPoint.displayMode === "installations"
+                          ? "Ouvrir un équipement du site"
+                          : "Ouvrir la fiche équipement"}
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="map-mini-sheet-grid">
+                  <article className="map-mini-sheet-card">
+                    <span className="map-mini-sheet-label">Maille</span>
+                    <strong>{selectedMapPoint.displayMode === "installations" ? "Installation" : "Équipement"}</strong>
+                    <small>
+                      {formatInteger(selectedMapPoint.basinCount)} bassins ·{" "}
+                      {formatInteger(selectedMapPoint.equipmentCount)} équipements
+                    </small>
+                  </article>
+                  <article className="map-mini-sheet-card">
+                    <span className="map-mini-sheet-label">Surface lue</span>
+                    <strong>{formatOptionalMeasure(selectedMapPoint.surface_bassin_m2 ?? 0, "m²", 0)}</strong>
+                    <small>
+                      {selectedMapPoint.displayMode === "installations"
+                        ? "Surface agrégée des bassins du site."
+                        : "Surface du bassin sélectionné."}
+                    </small>
+                  </article>
+                  <article className="map-mini-sheet-card">
+                    <span className="map-mini-sheet-label">Contexte</span>
+                    <strong>
+                      {selectedMapPoint.usage_scolaires === 1
+                        ? "Signal scolaire"
+                        : selectedMapPoint.qpv_flag === 1 || selectedMapPoint.qpv_200m_flag === 1
+                          ? "Proximité QPV"
+                          : "Lecture standard"}
+                    </strong>
+                    <small>
+                      {selectedMapPoint.qpv_flag === 1
+                        ? "Le site est implanté en QPV."
+                        : selectedMapPoint.qpv_200m_flag === 1
+                          ? "Le site est situé à 200 m d'un QPV."
+                          : "Pas de contrainte sociale immédiate détectée."}
+                    </small>
+                  </article>
+                  <article className="map-mini-sheet-card">
+                    <span className="map-mini-sheet-label">Source du statut</span>
+                    <strong>{selectedMapPoint.status_source ?? "Lecture Data.Sports"}</strong>
+                    <small>Le contour du repère reprend ce statut d'exploitation.</small>
+                  </article>
+                </div>
+
+                <div className="signal-pill-row">
+                  <span className="signal-pill">{selectedMapPoint.managementLabel}</span>
+                  {selectedMapPoint.usage_scolaires === 1 ? <span className="signal-pill">Usage scolaire</span> : null}
+                  {selectedMapPoint.qpv_flag === 1 ? <span className="signal-pill">En QPV</span> : null}
+                  {selectedMapPoint.qpv_flag !== 1 && selectedMapPoint.qpv_200m_flag === 1 ? (
+                    <span className="signal-pill">À 200 m QPV</span>
+                  ) : null}
+                </div>
+
+                {selectedMapPoint.operational_status_reason ? (
+                  <p className="map-mini-sheet-note">
+                    <strong>Lecture du statut :</strong> {selectedMapPoint.operational_status_reason}
+                  </p>
+                ) : null}
+              </div>
+            ) : mapSourcePoints.length > 0 ? (
+              <div className="map-mini-sheet map-mini-sheet-empty">
+                <strong>Aperçu rapide</strong>
+                <p>Clique sur un repère pour afficher un résumé du site directement sous la carte.</p>
+              </div>
+            ) : null}
+              </div>
+            </div>
           </article>
 
-          <article className="panel chart-panel">
+          <article className="panel chart-panel territory-card-wide">
             <div className="panel-heading">
               <div>
                 <span className="eyebrow">Gestion des équipements</span>
-                <h2>Répartition du parc aquatique filtré</h2>
+                <h2>Lectures rapides du parc filtré</h2>
               </div>
-              <p>Lecture dynamique selon les filtres de gestion, d'usage scolaires et de recherche libre.</p>
+              <p>
+                Trois lectures complémentaires au même périmètre cartographique : gestion, statut
+                d'exploitation et contexte d'usage.
+              </p>
             </div>
 
             {managementBreakdown.length > 0 ? (
-              <>
-                <div className="chart-wrap">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={managementBreakdown}
-                        dataKey="value"
-                        nameKey="name"
-                        innerRadius={62}
-                        outerRadius={98}
-                        paddingAngle={3}
-                      >
-                        {managementBreakdown.map((item) => (
-                          <Cell key={item.name} fill={item.color} />
-                        ))}
-                      </Pie>
-                      <Tooltip content={<ChartTooltip />} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
+              <div className="map-dashboard-grid">
+                <article className="map-dashboard-card">
+                  <div className="map-dashboard-card-header">
+                    <h3>Gestion</h3>
+                    <p>Répartition administrative du parc visible.</p>
+                  </div>
+                  <div className="chart-wrap map-chart-wrap">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={managementBreakdown}
+                          dataKey="value"
+                          nameKey="name"
+                          innerRadius={56}
+                          outerRadius={88}
+                          paddingAngle={3}
+                        >
+                          {managementBreakdown.map((item) => (
+                            <Cell key={item.name} fill={item.color} />
+                          ))}
+                        </Pie>
+                        <Tooltip content={<ChartTooltip />} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
 
-                <div className="legend">
-                  {managementBreakdown.map((item) => (
-                    <div key={item.name} className="legend-item">
-                      <span className="legend-swatch" style={{ backgroundColor: item.color }} />
-                      <span>{item.name}</span>
-                      <strong>{formatInteger(item.value)}</strong>
-                    </div>
-                  ))}
-                </div>
-              </>
+                  <div className="legend">
+                    {managementBreakdown.map((item) => (
+                      <div key={item.name} className="legend-item">
+                        <span className="legend-swatch" style={{ backgroundColor: item.color }} />
+                        <span>{item.name}</span>
+                        <strong>{formatInteger(item.value)}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </article>
+
+                <article className="map-dashboard-card">
+                  <div className="map-dashboard-card-header">
+                    <h3>Statut d'exploitation</h3>
+                    <p>Lecture rapide des ouvertures, travaux et fermetures.</p>
+                  </div>
+                  <div className="chart-wrap map-chart-wrap-compact">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={mapStatusBreakdown} layout="vertical" margin={{ top: 4, right: 12, bottom: 0, left: 0 }}>
+                        <CartesianGrid strokeDasharray="4 4" horizontal={false} stroke="#d6d6d6" />
+                        <XAxis type="number" tickLine={false} axisLine={false} allowDecimals={false} />
+                        <YAxis dataKey="name" type="category" tickLine={false} axisLine={false} width={132} tick={{ fontSize: 12 }} />
+                        <Tooltip content={<ChartTooltip />} />
+                        <Bar dataKey="value" name={inventoryCountMode === "equipments" ? "Équipements" : "Installations"} radius={[0, 10, 10, 0]}>
+                          {mapStatusBreakdown.map((item) => (
+                            <Cell key={item.name} fill={item.color} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </article>
+
+                <article className="map-dashboard-card">
+                  <div className="map-dashboard-card-header">
+                    <h3>Contexte des sites</h3>
+                    <p>Présence scolaire et proximité sociale dans le parc filtré.</p>
+                  </div>
+                  <div className="chart-wrap map-chart-wrap-compact">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={mapContextBreakdown} layout="vertical" margin={{ top: 4, right: 12, bottom: 0, left: 0 }}>
+                        <CartesianGrid strokeDasharray="4 4" horizontal={false} stroke="#d6d6d6" />
+                        <XAxis type="number" tickLine={false} axisLine={false} allowDecimals={false} />
+                        <YAxis dataKey="name" type="category" tickLine={false} axisLine={false} width={118} tick={{ fontSize: 12 }} />
+                        <Tooltip content={<ChartTooltip />} />
+                        <Bar dataKey="value" name={inventoryCountMode === "equipments" ? "Équipements" : "Installations"} radius={[0, 10, 10, 0]}>
+                          {mapContextBreakdown.map((item) => (
+                            <Cell key={item.name} fill={item.color} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </article>
+              </div>
             ) : (
               <p className="subtle-empty">Aucun équipement ne correspond aux filtres actuels.</p>
             )}
           </article>
 
+        </section>
+          ) : null}
+
+          {facilitiesView === "projects" ? (
+        <section className="content-grid content-grid-wide">
+          <article className="panel table-panel territory-card-wide">
+            <div className="panel-heading">
+              <div>
+                <span className="eyebrow">Veille projets</span>
+                <h2>Projets aquatiques en cours</h2>
+              </div>
+              <p>
+                Tous les projets répertoriés dans le rapport sont repris ici, en distinguant
+                constructions neuves, réhabilitations lourdes et dossiers encore incertains.
+              </p>
+            </div>
+
+            <div className="panel-heading-actions">
+              <div className="compact-control compact-control-wide">
+                <label htmlFor="project-search">Recherche projet</label>
+                <input
+                  id="project-search"
+                  type="search"
+                  placeholder="Commune, projet, maître d’ouvrage..."
+                  value={projectSearch}
+                  onChange={(event) => setProjectSearch(event.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="investigation-summary">
+              {projectSummaryCards.map((item) => (
+                <article key={item.label} className="summary-chip">
+                  <span className="summary-chip-label">{item.label}</span>
+                  <strong>{item.value}</strong>
+                  <small>{item.detail}</small>
+                </article>
+              ))}
+            </div>
+
+            <p className="chart-note">
+              Le repère cartographique est posé au centre communal de référence quand l’emprise
+              exacte du projet n’est pas publiée. La carte distingue donc un signal de projet, pas
+              une implantation juridique opposable.
+            </p>
+          </article>
+
+          <article className="panel chart-panel territory-card-wide">
+            <div className="panel-heading">
+              <div>
+                <span className="eyebrow">Lectures rapides</span>
+                <h2>Répartition des projets suivis</h2>
+              </div>
+              <p>
+                Triple lecture du portefeuille suivi : nature, phase d’avancement et horizon
+                d’ouverture ou de réouverture.
+              </p>
+            </div>
+
+            {filteredProjects.length > 0 ? (
+              <div className="map-dashboard-grid">
+                <article className="map-dashboard-card">
+                  <div className="map-dashboard-card-header">
+                    <h3>Nature des opérations</h3>
+                    <p>Constructions neuves, réhabilitations lourdes et cas très incertains.</p>
+                  </div>
+                  <div className="chart-wrap map-chart-wrap">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={projectBucketBreakdown}
+                          dataKey="value"
+                          nameKey="name"
+                          innerRadius={56}
+                          outerRadius={88}
+                          paddingAngle={3}
+                        >
+                          {projectBucketBreakdown.map((item) => (
+                            <Cell key={item.name} fill={item.color} />
+                          ))}
+                        </Pie>
+                        <Tooltip content={<ChartTooltip />} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="legend">
+                    {projectBucketBreakdown.map((item) => (
+                      <div key={item.name} className="legend-item">
+                        <span className="legend-swatch" style={{ backgroundColor: item.color }} />
+                        <span>{item.name}</span>
+                        <strong>{formatInteger(item.value)}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </article>
+
+                <article className="map-dashboard-card">
+                  <div className="map-dashboard-card-header">
+                    <h3>Phase d’avancement</h3>
+                    <p>Chantiers, programmation, procédures et dossiers encore fragiles.</p>
+                  </div>
+                  <div className="chart-wrap map-chart-wrap-compact">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={projectPhaseBreakdown} layout="vertical" margin={{ top: 4, right: 12, bottom: 0, left: 0 }}>
+                        <CartesianGrid strokeDasharray="4 4" horizontal={false} stroke="#d6d6d6" />
+                        <XAxis type="number" tickLine={false} axisLine={false} allowDecimals={false} />
+                        <YAxis dataKey="name" type="category" tickLine={false} axisLine={false} width={136} tick={{ fontSize: 12 }} />
+                        <Tooltip content={<ChartTooltip />} />
+                        <Bar dataKey="value" name="Projets" radius={[0, 10, 10, 0]}>
+                          {projectPhaseBreakdown.map((item) => (
+                            <Cell key={item.name} fill={item.color} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </article>
+
+                <article className="map-dashboard-card">
+                  <div className="map-dashboard-card-header">
+                    <h3>Horizon de mise en service</h3>
+                    <p>Lecture pratique des échéances proches, intermédiaires et lointaines.</p>
+                  </div>
+                  <div className="chart-wrap map-chart-wrap-compact">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={projectHorizonBreakdown} layout="vertical" margin={{ top: 4, right: 12, bottom: 0, left: 0 }}>
+                        <CartesianGrid strokeDasharray="4 4" horizontal={false} stroke="#d6d6d6" />
+                        <XAxis type="number" tickLine={false} axisLine={false} allowDecimals={false} />
+                        <YAxis dataKey="name" type="category" tickLine={false} axisLine={false} width={126} tick={{ fontSize: 12 }} />
+                        <Tooltip content={<ChartTooltip />} />
+                        <Bar dataKey="value" name="Projets" radius={[0, 10, 10, 0]}>
+                          {projectHorizonBreakdown.map((item) => (
+                            <Cell key={item.name} fill={item.color} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </article>
+              </div>
+            ) : (
+              <p className="subtle-empty">Aucun projet ne correspond au périmètre ou à la recherche active.</p>
+            )}
+          </article>
+
+          <article className="panel table-panel territory-card-wide">
+            <div className="panel-heading">
+              <div>
+                <span className="eyebrow">Liste complète</span>
+                <h2>Table des projets suivis</h2>
+              </div>
+              <p>
+                La lecture reprend le projet, son horizon, son statut public, le maître d’ouvrage
+                et le programme tel qu’il ressort du rapport de veille.
+              </p>
+            </div>
+
+            {filteredProjects.length > 0 ? (
+              <div className="table-scroll">
+                <table className="raw-table">
+                  <thead>
+                    <tr>
+                      <th>Projet</th>
+                      <th>Communes</th>
+                      <th>Nature</th>
+                      <th>Avancement</th>
+                      <th>Horizon</th>
+                      <th>Maîtrise d’ouvrage</th>
+                      <th>Programme</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredProjects.map((item) => (
+                      <tr key={item.project_id}>
+                        <td>
+                          <strong>{item.project_name}</strong>
+                          <div className="table-inline-pills">
+                            <span className={getProjectBucketPillClassName(item.project_bucket_code)}>
+                              {item.project_bucket_label}
+                            </span>
+                            <span className="project-phase-pill">{item.project_phase_label}</span>
+                          </div>
+                          {item.public_status ? <small className="table-subcopy">{item.public_status}</small> : null}
+                        </td>
+                        <td>
+                          <strong>{item.communes_label}</strong>
+                          <div>{item.departement ?? "Département n.c."}</div>
+                          <small className="table-subcopy">{item.location_precision_label}</small>
+                        </td>
+                        <td>{item.project_nature_label ?? item.project_bucket_label}</td>
+                        <td>{item.project_phase_label}</td>
+                        <td>{item.opening_label ?? "Échéance non précisée"}</td>
+                        <td>
+                          <strong>{item.project_owner ?? "n.c."}</strong>
+                          {item.budget_label ? <small className="table-subcopy">{item.budget_label}</small> : null}
+                        </td>
+                        <td>
+                          <strong>{item.program_summary ?? "Programme non détaillé dans le rapport."}</strong>
+                          {item.source_summary ? <small className="table-subcopy">{item.source_summary}</small> : null}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="subtle-empty">Aucun projet ne correspond au périmètre ou à la recherche active.</p>
+            )}
+          </article>
         </section>
           ) : null}
 
@@ -7654,7 +8846,7 @@ function App() {
               <div className="panel-heading">
                 <div>
                   <span className="eyebrow">Licences 2024</span>
-                  <h2>Structure par âge et sexe</h2>
+                  <h2>Structure par ?ge et sexe</h2>
                 </div>
                 <p>
                   Distribution FFN à l'échelle {selectedDepartment === "all" ? "régionale" : "départementale"}.
@@ -8730,6 +9922,16 @@ function getOperationalStatusPriority(code: OperationalStatusCode) {
   }
 }
 
+function createProjectMarkerIcon(bucketCode: ProjectBucketCode) {
+  const strokeColor = PROJECT_BUCKET_COLORS[bucketCode] ?? PROJECT_MARKER_STROKE;
+  return divIcon({
+    className: "project-marker-shell",
+    html: `<span class="project-marker-icon" style="--project-fill:${PROJECT_MARKER_FILL}; --project-stroke:${strokeColor};"></span>`,
+    iconSize: [18, 18],
+    iconAnchor: [9, 9],
+  });
+}
+
 function buildInstallationStatusRows(items: OperationalBasinRecord[]): InstallationStatusRecord[] {
   const grouped = new Map<string, OperationalBasinRecord[]>();
   items.forEach((item) => {
@@ -8844,8 +10046,42 @@ function getStatusVerificationLabel(row: InstallationStatusRecord) {
   return row.status_is_manual === 1 ? "Vérifié manuellement" : "Non vérifié";
 }
 
+function matchesFacilityOperationalStatusFilter(
+  statusCode: OperationalStatusCode,
+  filter: FacilityOperationalStatusFilter,
+) {
+  if (filter === "all") {
+    return true;
+  }
+  if (filter === "open") {
+    return statusCode === "open_probable" || statusCode === "seasonal";
+  }
+  if (filter === "closed") {
+    return statusCode === "temporary_closed" || statusCode === "closed";
+  }
+  return statusCode === "verify";
+}
+
+function getFacilityOperationalStatusFilterLabel(filter: FacilityOperationalStatusFilter) {
+  switch (filter) {
+    case "open":
+      return "Ouverts / saisonniers";
+    case "closed":
+      return "Fermés / travaux";
+    case "verify":
+      return "À vérifier";
+    case "all":
+    default:
+      return "Tous statuts";
+  }
+}
+
 function getOperationalStatusPillClassName(statusCode: OperationalStatusCode) {
   return `signal-pill status-pill status-pill-${statusCode.replace(/_/g, "-")}`;
+}
+
+function getProjectBucketPillClassName(bucketCode: ProjectBucketCode) {
+  return `signal-pill project-bucket-pill project-bucket-pill-${bucketCode.replace(/_/g, "-")}`;
 }
 
 function getFacilitySignalPillClassName(
@@ -9633,8 +10869,326 @@ function shortenEpci(label: string, maxLength = 36) {
   return `${label.slice(0, Math.max(1, maxLength - 3))}...`;
 }
 
-function hasCoordinates(item: BasinRecord) {
+function summarizeMapManagementLabel(labels: string[]) {
+  const uniqueLabels = Array.from(new Set(labels.filter(Boolean)));
+  if (uniqueLabels.length === 1) {
+    return uniqueLabels[0];
+  }
+  return "Gestion mixte";
+}
+
+function getManagementColor(label: string) {
+  if (label === "Gestion mixte") {
+    return "#7a6f5a";
+  }
+  return MANAGEMENT_COLORS[label] ?? "#666666";
+}
+
+function hasCoordinates(item: Pick<BasinRecord, "latitude" | "longitude">) {
   return Number.isFinite(item.latitude) && Number.isFinite(item.longitude);
+}
+
+function buildEquipmentMapPoints(items: OperationalBasinRecord[]): FacilityMapPoint[] {
+  return items.filter(hasCoordinates).map((item) => ({
+    kind: "point",
+    id: item.id_equipement,
+    displayMode: "equipments",
+    installationId: item.id_installation || item.id_equipement,
+    equipmentId: item.id_equipement,
+    installation: item.installation,
+    equipment: item.equipement,
+    typeLabel: item.type_equipement,
+    commune: item.commune,
+    departement: item.departement,
+    latitude: item.latitude,
+    longitude: item.longitude,
+    managementLabel: item.mode_gestion_calcule,
+    operational_status_code: item.operational_status_code,
+    operational_status_label: item.operational_status_label,
+    operational_status_reason: item.operational_status_reason,
+    status_source: item.status_source,
+    usage_scolaires: item.usage_scolaires,
+    qpv_flag: item.qpv_flag,
+    qpv_200m_flag: item.qpv_200m_flag,
+    surface_bassin_m2: item.surface_bassin_m2,
+    equipmentCount: 1,
+    basinCount: 1,
+  }));
+}
+
+function buildInstallationMapPoints(items: OperationalBasinRecord[]): FacilityMapPoint[] {
+  const groups = new Map<string, OperationalBasinRecord[]>();
+  items.forEach((item) => {
+    if (!hasCoordinates(item)) {
+      return;
+    }
+    const key = item.id_installation || item.id_equipement;
+    const rows = groups.get(key) ?? [];
+    rows.push(item);
+    groups.set(key, rows);
+  });
+
+  return Array.from(groups.entries()).map(([installationId, rows]) => {
+    const primary = [...rows].sort((left, right) => {
+      const priorityGap =
+        getOperationalStatusPriority(left.operational_status_code) -
+        getOperationalStatusPriority(right.operational_status_code);
+      if (priorityGap !== 0) {
+        return priorityGap;
+      }
+      return left.equipement.localeCompare(right.equipement, "fr");
+    })[0];
+    const latitude = average(rows.map((item) => item.latitude).filter((value): value is number => Number.isFinite(value)));
+    const longitude = average(rows.map((item) => item.longitude).filter((value): value is number => Number.isFinite(value)));
+
+    return {
+      kind: "point",
+      id: installationId,
+      displayMode: "installations",
+      installationId,
+      equipmentId: primary.id_equipement,
+      installation: primary.installation,
+      equipment: null,
+      typeLabel: null,
+      commune: primary.commune,
+      departement: primary.departement,
+      latitude,
+      longitude,
+      managementLabel: summarizeMapManagementLabel(rows.map((item) => item.mode_gestion_calcule)),
+      operational_status_code: primary.operational_status_code,
+      operational_status_label: primary.operational_status_label,
+      operational_status_reason: primary.operational_status_reason,
+      status_source: primary.status_source,
+      usage_scolaires: rows.some((item) => item.usage_scolaires === 1) ? 1 : 0,
+      qpv_flag: rows.some((item) => item.qpv_flag === 1) ? 1 : 0,
+      qpv_200m_flag: rows.some((item) => item.qpv_200m_flag === 1) ? 1 : 0,
+      surface_bassin_m2: rows.reduce((sum, item) => sum + (item.surface_bassin_m2 ?? 0), 0) || null,
+      equipmentCount: countUnique(rows.map((item) => item.id_equipement)),
+      basinCount: rows.length,
+    };
+  });
+}
+
+function getFacilityMapClusterGridSize(zoom: number) {
+  if (zoom >= 10) {
+    return 0;
+  }
+  if (zoom >= 9) {
+    return 0.07;
+  }
+  if (zoom >= 8) {
+    return 0.12;
+  }
+  return 0.2;
+}
+
+function buildFacilityMapDisplayItems(points: FacilityMapPoint[], zoom: number): Array<FacilityMapPoint | FacilityMapCluster> {
+  const gridSize = getFacilityMapClusterGridSize(zoom);
+  if (gridSize <= 0) {
+    return points;
+  }
+
+  const groups = new Map<string, FacilityMapPoint[]>();
+  points.forEach((point) => {
+    const gridKey = `${Math.round(point.latitude / gridSize)}:${Math.round(point.longitude / gridSize)}`;
+    const rows = groups.get(gridKey) ?? [];
+    rows.push(point);
+    groups.set(gridKey, rows);
+  });
+
+  return Array.from(groups.entries()).flatMap(([gridKey, rows]) => {
+    if (rows.length === 1) {
+      return rows;
+    }
+
+    const latitude = average(rows.map((item) => item.latitude));
+    const longitude = average(rows.map((item) => item.longitude));
+    const primary = [...rows].sort((left, right) => {
+      const priorityGap =
+        getOperationalStatusPriority(left.operational_status_code) -
+        getOperationalStatusPriority(right.operational_status_code);
+      if (priorityGap !== 0) {
+        return priorityGap;
+      }
+      return left.installation.localeCompare(right.installation, "fr");
+    })[0];
+    const statusBreakdown = OPERATIONAL_STATUS_LEGEND.map((status) => ({
+      code: status.key,
+      label: status.label,
+      count: rows.filter((item) => item.operational_status_code === status.key).length,
+    })).filter((item) => item.count > 0);
+    const managementCounters = new Map<string, number>();
+    rows.forEach((item) => {
+      managementCounters.set(item.managementLabel, (managementCounters.get(item.managementLabel) ?? 0) + 1);
+    });
+    const managementBreakdown = Array.from(managementCounters.entries())
+      .map(([label, count]) => ({ label, count }))
+      .sort((left, right) => right.count - left.count);
+
+    return [
+      {
+        kind: "cluster" as const,
+        id: `cluster-${gridKey}-${rows[0].displayMode}`,
+        displayMode: rows[0].displayMode,
+        latitude,
+        longitude,
+        count: rows.length,
+        managementLabel: summarizeMapManagementLabel(rows.map((item) => item.managementLabel)),
+        operational_status_code: primary.operational_status_code,
+        operational_status_label:
+          statusBreakdown.length === 1 ? primary.operational_status_label : `${rows.length} repères regroupés`,
+        samplePoints: rows
+          .slice()
+          .sort((left, right) => left.installation.localeCompare(right.installation, "fr"))
+          .slice(0, 5),
+        managementBreakdown,
+        statusBreakdown,
+      },
+    ];
+  });
+}
+
+function createFacilityClusterIcon(cluster: FacilityMapCluster) {
+  const fillColor = getManagementColor(cluster.managementLabel);
+  const borderColor = OPERATIONAL_STATUS_COLORS[cluster.operational_status_code] ?? "#666666";
+  const size = cluster.count >= 10 ? 40 : cluster.count >= 5 ? 36 : 32;
+  return divIcon({
+    className: "facility-cluster-shell",
+    html: `<span class="facility-cluster-icon" style="--cluster-fill:${fillColor}; --cluster-stroke:${borderColor}; width:${size}px; height:${size}px;">${cluster.count}</span>`,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+  });
+}
+
+function MapZoomTracker({ onZoomChange }: { onZoomChange: (zoom: number) => void }) {
+  const map = useMapEvents({
+    zoomend() {
+      onZoomChange(map.getZoom());
+    },
+  });
+
+  useEffect(() => {
+    onZoomChange(map.getZoom());
+  }, [map, onZoomChange]);
+
+  return null;
+}
+
+function MapAutoFocusController({
+  points,
+  searchTerm,
+  focusedPoint,
+}: {
+  points: FacilityMapPoint[];
+  searchTerm: string;
+  focusedPoint: FacilityMapPoint | null;
+}) {
+  const map = useMap();
+  const lastFocusedPointIdRef = useRef("");
+  const lastSearchSignatureRef = useRef("");
+
+  useEffect(() => {
+    if (!focusedPoint) {
+      lastFocusedPointIdRef.current = "";
+      return;
+    }
+    if (lastFocusedPointIdRef.current === focusedPoint.id) {
+      return;
+    }
+    lastFocusedPointIdRef.current = focusedPoint.id;
+    map.flyTo(
+      [focusedPoint.latitude, focusedPoint.longitude],
+      Math.max(map.getZoom(), focusedPoint.displayMode === "installations" ? 11 : 12),
+      { duration: 0.65 },
+    );
+  }, [focusedPoint, map]);
+
+  useEffect(() => {
+    if (!searchTerm) {
+      lastSearchSignatureRef.current = "";
+      return;
+    }
+
+    const visiblePoints = points.filter(
+      (item) => Number.isFinite(item.latitude) && Number.isFinite(item.longitude),
+    );
+    const signature = `${searchTerm}|${visiblePoints.map((item) => item.id).join("|")}`;
+    if (lastSearchSignatureRef.current === signature) {
+      return;
+    }
+    lastSearchSignatureRef.current = signature;
+
+    if (visiblePoints.length === 0) {
+      return;
+    }
+
+    if (visiblePoints.length === 1) {
+      const [target] = visiblePoints;
+      map.flyTo(
+        [target.latitude, target.longitude],
+        Math.max(map.getZoom(), target.displayMode === "installations" ? 11 : 12),
+        { duration: 0.65 },
+      );
+      return;
+    }
+
+    map.fitBounds(
+      latLngBounds(visiblePoints.map((item) => [item.latitude, item.longitude] as [number, number])),
+      {
+        padding: [32, 32],
+        maxZoom: 10,
+      },
+    );
+  }, [map, points, searchTerm]);
+
+  return null;
+}
+
+function FacilityMapClusterMarker({ cluster }: { cluster: FacilityMapCluster }) {
+  const map = useMap();
+  const icon = useMemo(() => createFacilityClusterIcon(cluster), [cluster]);
+
+  return (
+    <Marker
+      position={[cluster.latitude, cluster.longitude]}
+      icon={icon}
+      eventHandlers={{
+        click() {
+          map.flyTo([cluster.latitude, cluster.longitude], Math.min(map.getZoom() + 2, 12));
+        },
+      }}
+    >
+      <Popup>
+        <div className="popup-card">
+          <strong>
+            {formatInteger(cluster.count)} {cluster.displayMode === "equipments" ? "équipements" : "installations"} regroupés
+          </strong>
+          <span>Zoom actuel trop large pour détailler chaque point individuellement.</span>
+          <div className="popup-tags">
+            {cluster.statusBreakdown.map((item) => (
+              <span key={item.code} className={`status-pill status-pill-${item.code.replace(/_/g, "-")}`}>
+                {item.label} · {formatInteger(item.count)}
+              </span>
+            ))}
+          </div>
+          <div className="popup-list">
+            {cluster.samplePoints.map((item) => (
+              <span key={item.id}>
+                {item.installation} · {item.commune}
+              </span>
+            ))}
+          </div>
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => map.flyTo([cluster.latitude, cluster.longitude], Math.min(map.getZoom() + 2, 12))}
+          >
+            Zoomer ici
+          </button>
+        </div>
+      </Popup>
+    </Marker>
+  );
 }
 
 function formatInteger(value: number) {
@@ -9802,3 +11356,4 @@ function formatDate(iso: string) {
 }
 
 export default App;
+

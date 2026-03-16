@@ -242,6 +242,44 @@ export type OperationalStatusCode =
   | "seasonal"
   | "verify";
 
+export type ProjectBucketCode = "new" | "rehab" | "uncertain";
+
+export type ProjectPhaseCode =
+  | "works"
+  | "programming"
+  | "procedure"
+  | "consultation"
+  | "recent_delivery"
+  | "uncertain";
+
+export interface ProjectInProgressRecord {
+  project_id: string;
+  project_name: string;
+  communes_label: string;
+  commune_reference: string | null;
+  code_commune: string | null;
+  commune: string | null;
+  epci_code: string | null;
+  epci_nom: string | null;
+  code_departement: string | null;
+  departement: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  location_precision_label: string;
+  project_bucket_code: ProjectBucketCode;
+  project_bucket_label: string;
+  project_nature_label: string | null;
+  project_phase_code: ProjectPhaseCode;
+  project_phase_label: string;
+  public_status: string | null;
+  opening_label: string | null;
+  opening_sort_value: number | null;
+  project_owner: string | null;
+  budget_label: string | null;
+  program_summary: string | null;
+  source_summary: string | null;
+}
+
 export type SchoolBroadLevel = "primary" | "secondary" | "mixed";
 
 export interface SchoolDemandOverview {
@@ -525,6 +563,7 @@ export interface DashboardData {
   extended_inventory: ExtendedInventoryRecord[];
   installation_status: InstallationStatusRecord[];
   status_review_queue: InstallationStatusReviewQueueRecord[];
+  projects_in_progress: ProjectInProgressRecord[];
   school_demand_overview: SchoolDemandOverview;
   school_establishments: SchoolEstablishmentRecord[];
   school_demand_epci: SchoolDemandEpciRecord[];

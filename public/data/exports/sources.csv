@@ -15,4 +15,5 @@ Définition scolaire explicite,traitement DRAJES à partir de données publiques
 14 Centres communaux,geo.api.gouv.fr,commune,API temps reel,Hauts-de-France,points d'origine pour les calculs d'accessibilite voiture
 15 Temps d'acces voiture,OpenStreetMap / OSRM,commune -> installation,calcul au fil de l'eau,Installation aquatique la plus proche,lecture d'accessibilite voiture par commune et par EPCI
 16 GTFS transports collectifs,transport.data.gouv.fr,arrêt / gare / service,API temps réel,TER + réseaux interurbains Hauts-de-France,"offre TC potentielle autour des communes, des installations et des établissements"
-17 Statuts d'exploitation vérifiés,vérification manuelle locale,installation / équipement,mise à jour locale,surcouche au-dessus de Data ES,"correction des fermetures, travaux et statuts à confirmer"
+17 Projets aquatiques en cours,veille projets 16 mars 2026,projet,2026,Hauts-de-France · projets répertoriés dans le rapport,"repérage des constructions neuves, réhabilitations lourdes et projets incertains"
+18 Statuts d'exploitation vérifiés,vérification manuelle locale,installation / équipement,mise à jour locale,surcouche au-dessus de Data ES,"correction des fermetures, travaux et statuts à confirmer"
