@@ -1,0 +1,6 @@
+﻿id_installation,installation,commune,departement,epci_nom,current_status,priority_label,priority_score,suggested_status,suggested_status_label,confidence,ready_for_override,evidence_domain_type,evidence_url,evidence_title,evidence_snippet,evidence_origin,query_used,review_comment
+I595120028,Centre Nautique THALASSA,Roubaix,Nord,Métropole Européenne de Lille,Fermé temporairement / travaux,prioritaire,100,,,,0,,,,,,,Aucune evidence suffisamment fiable detectee.
+I620040009,PISCINE MUNICIPALE,Achicourt,Pas-de-Calais,CU d'Arras,Fermé temporairement / travaux,prioritaire,100,,,,0,,,,,,,Aucune evidence suffisamment fiable detectee.
+I800210027,Piscine Le Nautilus (structurant),Amiens,Somme,CA Amiens Métropole,Fermé temporairement / travaux,prioritaire,100,,,,0,,,,,,,Aucune evidence suffisamment fiable detectee.
+I592710025,Piscine Léo Lagrange,Grande-Synthe,Nord,CU de Dunkerque,Fermé temporairement / travaux,prioritaire,100,,,,0,,,,,,,Aucune evidence suffisamment fiable detectee.
+I592860012,"Centre Aquatique Loos Haubourdin ""NEPTUNIA""",Haubourdin,Nord,Métropole Européenne de Lille,Fermé / hors service,prioritaire,95,,,,0,,,,,,,Aucune evidence suffisamment fiable detectee.

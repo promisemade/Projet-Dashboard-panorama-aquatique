@@ -192,6 +192,10 @@ export interface ExtendedInventoryRecord {
   code_type_equipement: string | null;
   rnb_id: string | null;
   uai: string | null;
+  survey_date: string | null;
+  state_change_date: string | null;
+  observation_installation: string | null;
+  observation_equipement: string | null;
   handicap_access_types: string | null;
   transport_access_modes: string | null;
   opening_authorized_flag: number;
@@ -216,10 +220,27 @@ export interface ExtendedInventoryRecord {
   profondeur_max_m: number | null;
   nb_couloirs: number | null;
   installation_out_of_service_flag: number;
+  operational_status_code: OperationalStatusCode;
+  operational_status_label: string;
+  operational_status_reason: string | null;
+  status_source: string | null;
+  status_source_url: string | null;
+  status_reviewed_at: string | null;
+  status_confidence: string | null;
+  status_verified_by: string | null;
+  status_is_manual: number;
+  status_override_comment: string | null;
   longitude: number | null;
   latitude: number | null;
   activites: string | null;
 }
+
+export type OperationalStatusCode =
+  | "open_probable"
+  | "temporary_closed"
+  | "closed"
+  | "seasonal"
+  | "verify";
 
 export type SchoolBroadLevel = "primary" | "secondary" | "mixed";
 
@@ -427,6 +448,49 @@ export interface InstallationTransitRecord {
   weekday_trips_within_1000m: number;
 }
 
+export interface InstallationStatusRecord {
+  id_installation: string;
+  installation: string | null;
+  code_commune: string | null;
+  commune: string | null;
+  epci_code: string | null;
+  epci_nom: string | null;
+  code_departement: string | null;
+  departement: string | null;
+  equipments_total: number;
+  bassins_total: number;
+  operational_status_code: OperationalStatusCode;
+  operational_status_label: string;
+  operational_status_reason: string | null;
+  status_source: string | null;
+  status_source_url: string | null;
+  status_reviewed_at: string | null;
+  status_confidence: string | null;
+  status_verified_by: string | null;
+  status_is_manual: number;
+  status_override_comment: string | null;
+  survey_date_latest: string | null;
+  state_change_date_latest: string | null;
+}
+
+export interface InstallationStatusReviewQueueRecord {
+  priority_label: string;
+  priority_score: number;
+  id_installation: string | null;
+  installation: string | null;
+  commune: string | null;
+  departement: string | null;
+  epci_nom: string | null;
+  operational_status_label: string | null;
+  operational_status_reason: string | null;
+  status_source: string | null;
+  survey_date_latest: string | null;
+  state_change_date_latest: string | null;
+  days_since_survey: number | null;
+  search_hint: string | null;
+  queue_reason: string | null;
+}
+
 export interface TransitEpciRecord extends TransitOverview {
   epci_code: string;
   epci_nom: string | null;
@@ -459,6 +523,8 @@ export interface DashboardData {
   sources: SourceEntry[];
   extended_inventory_overview: ExtendedInventoryOverview;
   extended_inventory: ExtendedInventoryRecord[];
+  installation_status: InstallationStatusRecord[];
+  status_review_queue: InstallationStatusReviewQueueRecord[];
   school_demand_overview: SchoolDemandOverview;
   school_establishments: SchoolEstablishmentRecord[];
   school_demand_epci: SchoolDemandEpciRecord[];

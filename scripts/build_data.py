@@ -10,6 +10,7 @@ import re
 import shutil
 import sys
 import time
+import unicodedata
 import zipfile
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
@@ -33,6 +34,8 @@ PUBLIC_EXPORT_DIR = PUBLIC_DATA_DIR / "exports"
 EXPORT_DIR = ROOT / "data" / "exports"
 
 EXTENDED_INVENTORY_EXPORT_NAME = "equipements_sportifs_non_filtres"
+INSTALLATION_STATUS_EXPORT_NAME = "statuts_installations"
+STATUS_REVIEW_EXPORT_NAME = "controle_statuts_prioritaires"
 SCHOOL_ESTABLISHMENTS_EXPORT_NAME = "etablissements_scolaires_hdf"
 SCHOOL_DEMAND_OVERVIEW_EXPORT_NAME = "pression_scolaire_synthese"
 SCHOOL_DEMAND_EPCI_EXPORT_NAME = "pression_scolaire_epci"
@@ -50,13 +53,39 @@ META_SUBTITLE = (
     "Croisement de données publiques pour lire la pratique FFN, l'offre en bassins, "
     "les usages scolaires, les modes de gestion et les enjeux QPV."
 )
-META_SOURCE_LABELS = [
+META_SOURCE_LABELS_BASE = [
     "Data.Sports",
     "Data.Education",
     "geo.api.gouv.fr",
     "OpenStreetMap/OSRM",
     "transport.data.gouv.fr",
 ]
+STATUS_OVERRIDE_FILE = ROOT / "data" / "raw" / "statut_installations_verifies.csv"
+STATUS_OVERRIDE_FIELDNAMES = [
+    "id_installation",
+    "id_equipement",
+    "statut_verifie",
+    "source_verification",
+    "source_url",
+    "date_verification",
+    "niveau_confiance",
+    "verifie_par",
+    "commentaire",
+]
+STATUS_LABELS = {
+    "open_probable": "Ouvert probable",
+    "temporary_closed": "Fermé temporairement / travaux",
+    "closed": "Fermé / hors service",
+    "seasonal": "Ouverture saisonnière",
+    "verify": "Statut à vérifier",
+}
+STATUS_PRIORITY = {
+    "closed": 0,
+    "temporary_closed": 1,
+    "verify": 2,
+    "seasonal": 3,
+    "open_probable": 4,
+}
 
 TABLE_SHEETS = {
     "departements": "02_Departements",
@@ -130,12 +159,21 @@ def main() -> None:
     EDUCATION_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     ACCESSIBILITY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     TRANSPORT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_status_override_file()
 
     tables = {name: load_table(sheet_name) for name, sheet_name in TABLE_SHEETS.items()}
-    tables["sources"] = augment_sources_table(sanitize_sources_table(tables["sources"]))
 
     notes = load_notes()
-    extended_inventory = load_extended_inventory()
+    extended_inventory, status_override_count = load_extended_inventory()
+    installation_status = build_installation_status_records(extended_inventory)
+    status_review_queue = build_status_review_queue(installation_status)
+    tables["sources"] = augment_sources_table(
+        sanitize_sources_table(tables["sources"]),
+        status_override_count,
+    )
+    source_labels = [
+        *META_SOURCE_LABELS_BASE,
+    ]
     basin_records = frame_to_records(tables["bassins_points"])
     school_demand = build_school_demand(tables["communes"], basin_records)
     accessibility = build_commune_accessibility(tables["communes"], basin_records)
@@ -148,6 +186,8 @@ def main() -> None:
 
     export_csvs(tables)
     export_additional_records(EXTENDED_INVENTORY_EXPORT_NAME, extended_inventory)
+    export_additional_records(INSTALLATION_STATUS_EXPORT_NAME, installation_status)
+    export_additional_records(STATUS_REVIEW_EXPORT_NAME, status_review_queue)
     export_additional_records(
         SCHOOL_ESTABLISHMENTS_EXPORT_NAME, school_establishments
     )
@@ -181,8 +221,8 @@ def main() -> None:
             "region": "Hauts-de-France",
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "source_file": SOURCE_FILE.name,
-            "source_summary": format_source_summary(META_SOURCE_LABELS),
-            "source_labels": META_SOURCE_LABELS,
+            "source_summary": format_source_summary(source_labels),
+            "source_labels": source_labels,
             "source_updated_at": datetime.fromtimestamp(
                 SOURCE_FILE.stat().st_mtime, tz=timezone.utc
             ).isoformat(),
@@ -206,6 +246,8 @@ def main() -> None:
         "sources": frame_to_records(tables["sources"]),
         "extended_inventory_overview": build_extended_inventory_overview(extended_inventory),
         "extended_inventory": extended_inventory,
+        "installation_status": installation_status,
+        "status_review_queue": status_review_queue,
         "school_demand_overview": school_demand["school_demand_overview"],
         "school_establishments": school_establishments,
         "school_demand_epci": school_demand["school_demand_epci"],
@@ -229,6 +271,14 @@ def main() -> None:
             {
                 "label": "equipements sportifs non filtres",
                 "path": f"data/exports/{EXTENDED_INVENTORY_EXPORT_NAME}.csv",
+            },
+            {
+                "label": "statuts installations",
+                "path": f"data/exports/{INSTALLATION_STATUS_EXPORT_NAME}.csv",
+            },
+            {
+                "label": "controle statuts prioritaires",
+                "path": f"data/exports/{STATUS_REVIEW_EXPORT_NAME}.csv",
             },
             {
                 "label": "etablissements scolaires hdf",
@@ -308,10 +358,434 @@ def load_notes() -> list[dict[str, str]]:
     return notes
 
 
-def load_extended_inventory() -> list[dict[str, Any]]:
-    if not EXTENDED_INVENTORY_FILE.exists():
-        return []
+def ensure_status_override_file() -> None:
+    STATUS_OVERRIDE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if not STATUS_OVERRIDE_FILE.exists():
+        with STATUS_OVERRIDE_FILE.open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.writer(handle, delimiter=";")
+            writer.writerow(STATUS_OVERRIDE_FIELDNAMES)
+        return
 
+    with STATUS_OVERRIDE_FILE.open(encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter=";")
+        existing_fieldnames = reader.fieldnames or []
+        if existing_fieldnames == STATUS_OVERRIDE_FIELDNAMES:
+            return
+        rows = list(reader)
+
+    with STATUS_OVERRIDE_FILE.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.writer(handle, delimiter=";")
+        writer.writerow(STATUS_OVERRIDE_FIELDNAMES)
+        for row in rows:
+            writer.writerow([row.get(field, "") for field in STATUS_OVERRIDE_FIELDNAMES])
+
+
+def normalize_status_confidence(value: Any) -> str | None:
+    normalized = normalize_search_text(value)
+    if not normalized:
+        return None
+
+    mapping = {
+        "forte": "Forte",
+        "haut": "Forte",
+        "high": "Forte",
+        "moyenne": "Moyenne",
+        "medium": "Moyenne",
+        "intermediaire": "Moyenne",
+        "faible": "Faible",
+        "low": "Faible",
+    }
+    return mapping.get(normalized, clean_text(value))
+
+
+def normalize_status_token(value: Any) -> str | None:
+    normalized = normalize_search_text(value)
+    if not normalized:
+        return None
+
+    mapping = {
+        "ouvert": "open_probable",
+        "ouvert_probable": "open_probable",
+        "open_probable": "open_probable",
+        "en_service": "open_probable",
+        "actif": "open_probable",
+        "ferme_temporairement": "temporary_closed",
+        "ferme_temporaire": "temporary_closed",
+        "fermeture_temporaire": "temporary_closed",
+        "travaux": "temporary_closed",
+        "ferme_pour_travaux": "temporary_closed",
+        "temporary_closed": "temporary_closed",
+        "ferme": "closed",
+        "ferme_hors_service": "closed",
+        "hors_service": "closed",
+        "definitivement_ferme": "closed",
+        "closed": "closed",
+        "saisonnier": "seasonal",
+        "ouverture_saisonniere": "seasonal",
+        "seasonal": "seasonal",
+        "a_verifier": "verify",
+        "a_confirmer": "verify",
+        "incertain": "verify",
+        "verify": "verify",
+    }
+    return mapping.get(normalized)
+
+
+def load_status_overrides() -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], int]:
+    if not STATUS_OVERRIDE_FILE.exists():
+        return {}, {}, 0
+
+    installation_overrides: dict[str, dict[str, Any]] = {}
+    equipment_overrides: dict[str, dict[str, Any]] = {}
+    count = 0
+
+    with STATUS_OVERRIDE_FILE.open(encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter=";")
+        for row in reader:
+            status_code = normalize_status_token(row.get("statut_verifie"))
+            installation_id = clean_identifier(row.get("id_installation"))
+            equipment_id = clean_identifier(row.get("id_equipement"))
+            if not status_code or (not installation_id and not equipment_id):
+                continue
+
+            payload = {
+                "status_code": status_code,
+                "status_label": STATUS_LABELS[status_code],
+                "status_source": clean_text(row.get("source_verification")) or "Source locale renseignée",
+                "status_source_url": clean_text(row.get("source_url")),
+                "status_reviewed_at": clean_text(row.get("date_verification")),
+                "status_confidence": normalize_status_confidence(row.get("niveau_confiance")) or "Forte",
+                "status_verified_by": clean_text(row.get("verifie_par")),
+                "status_is_manual": 1,
+                "status_comment": clean_text(row.get("commentaire")),
+            }
+
+            if equipment_id:
+                equipment_overrides[equipment_id] = payload
+                count += 1
+                continue
+
+            installation_overrides[installation_id] = payload
+            count += 1
+
+    return installation_overrides, equipment_overrides, count
+
+
+def build_status_excerpt(*values: Any, max_length: int = 180) -> str | None:
+    text = " ".join(filter(None, [clean_text(value) for value in values]))
+    if not text:
+        return None
+    compact = re.sub(r"\s+", " ", text).strip()
+    if len(compact) <= max_length:
+        return compact
+    return compact[: max_length - 1].rstrip() + "…"
+
+
+def classify_operational_status(
+    *,
+    installation_out_of_service_flag: int,
+    seasonal_only_flag: int,
+    observation_installation: str | None,
+    observation_equipement: str | None,
+    override: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if override:
+        return {
+            "operational_status_code": override["status_code"],
+            "operational_status_label": override["status_label"],
+            "operational_status_reason": override.get("status_comment") or "Statut vérifié manuellement.",
+            "status_source": override.get("status_source") or "Source locale renseignée",
+            "status_source_url": override.get("status_source_url"),
+            "status_reviewed_at": override.get("status_reviewed_at"),
+            "status_confidence": override.get("status_confidence"),
+            "status_verified_by": override.get("status_verified_by"),
+            "status_is_manual": override.get("status_is_manual", 1),
+            "status_override_comment": override.get("status_comment"),
+        }
+
+    observation_text = normalize_search_text(
+        " ".join(
+            value for value in [observation_installation, observation_equipement] if isinstance(value, str)
+        )
+    )
+    excerpt = build_status_excerpt(observation_installation, observation_equipement)
+
+    has_closure_signal = bool(
+        observation_text
+        and (
+            "ferme" in observation_text
+            or "fermeture" in observation_text
+            or "hors service" in observation_text
+            or "desaffect" in observation_text
+        )
+    )
+    has_temporary_signal = bool(
+        observation_text
+        and (
+            "travaux" in observation_text
+            or "chantier" in observation_text
+            or "renov" in observation_text
+            or "rehabilit" in observation_text
+            or "reouverture" in observation_text
+            or "rouvr" in observation_text
+        )
+    )
+
+    if installation_out_of_service_flag == 1:
+        return {
+            "operational_status_code": "closed",
+            "operational_status_label": STATUS_LABELS["closed"],
+            "operational_status_reason": excerpt or "Installation hors service signalée dans Data ES.",
+            "status_source": "Data ES calculé",
+            "status_source_url": None,
+            "status_reviewed_at": None,
+            "status_confidence": None,
+            "status_verified_by": None,
+            "status_is_manual": 0,
+            "status_override_comment": None,
+        }
+
+    if has_closure_signal and has_temporary_signal:
+        return {
+            "operational_status_code": "temporary_closed",
+            "operational_status_label": STATUS_LABELS["temporary_closed"],
+            "operational_status_reason": excerpt or "Observation Data ES signalant une fermeture temporaire ou des travaux.",
+            "status_source": "Data ES calculé",
+            "status_source_url": None,
+            "status_reviewed_at": None,
+            "status_confidence": None,
+            "status_verified_by": None,
+            "status_is_manual": 0,
+            "status_override_comment": None,
+        }
+
+    if has_closure_signal:
+        return {
+            "operational_status_code": "closed",
+            "operational_status_label": STATUS_LABELS["closed"],
+            "operational_status_reason": excerpt or "Observation Data ES signalant une fermeture ou un hors service.",
+            "status_source": "Data ES calculé",
+            "status_source_url": None,
+            "status_reviewed_at": None,
+            "status_confidence": None,
+            "status_verified_by": None,
+            "status_is_manual": 0,
+            "status_override_comment": None,
+        }
+
+    if seasonal_only_flag == 1:
+        return {
+            "operational_status_code": "seasonal",
+            "operational_status_label": STATUS_LABELS["seasonal"],
+            "operational_status_reason": excerpt or "Ouverture exclusivement saisonnière signalée dans Data ES.",
+            "status_source": "Data ES calculé",
+            "status_source_url": None,
+            "status_reviewed_at": None,
+            "status_confidence": None,
+            "status_verified_by": None,
+            "status_is_manual": 0,
+            "status_override_comment": None,
+        }
+
+    if has_temporary_signal:
+        return {
+            "operational_status_code": "verify",
+            "operational_status_label": STATUS_LABELS["verify"],
+            "operational_status_reason": excerpt or "Observation Data ES à confirmer sur l'état d'exploitation.",
+            "status_source": "Data ES calculé",
+            "status_source_url": None,
+            "status_reviewed_at": None,
+            "status_confidence": None,
+            "status_verified_by": None,
+            "status_is_manual": 0,
+            "status_override_comment": None,
+        }
+
+    return {
+        "operational_status_code": "open_probable",
+        "operational_status_label": STATUS_LABELS["open_probable"],
+        "operational_status_reason": "Aucun signal de fermeture détecté dans Data ES.",
+        "status_source": "Data ES calculé",
+        "status_source_url": None,
+        "status_reviewed_at": None,
+        "status_confidence": None,
+        "status_verified_by": None,
+        "status_is_manual": 0,
+        "status_override_comment": None,
+    }
+
+
+def build_installation_status_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for record in records:
+        installation_id = clean_identifier(record.get("id_installation")) or clean_identifier(record.get("id_equipement"))
+        if not installation_id:
+            continue
+        grouped[installation_id].append(record)
+
+    rows: list[dict[str, Any]] = []
+    for installation_id, items in grouped.items():
+        sorted_items = sorted(
+            items,
+            key=lambda item: (
+                STATUS_PRIORITY.get(clean_text(item.get("operational_status_code")) or "verify", 99),
+                clean_identifier(item.get("id_equipement")) or "",
+            ),
+        )
+        primary = sorted_items[0]
+        distinct_statuses = {
+            clean_text(item.get("operational_status_code")) or "verify"
+            for item in items
+            if clean_text(item.get("operational_status_code"))
+        }
+        reason = clean_text(primary.get("operational_status_reason"))
+        if len(distinct_statuses) > 1:
+            reason = (
+                f"{reason} Signaux hétérogènes entre équipements du site."
+                if reason
+                else "Signaux hétérogènes entre équipements du site."
+            )
+
+        survey_dates = [clean_text(item.get("survey_date")) for item in items if clean_text(item.get("survey_date"))]
+        state_change_dates = [
+            clean_text(item.get("state_change_date"))
+            for item in items
+            if clean_text(item.get("state_change_date"))
+        ]
+
+        rows.append(
+            {
+                "id_installation": installation_id,
+                "installation": clean_text(primary.get("installation")),
+                "code_commune": clean_commune_code(primary.get("code_commune")),
+                "commune": clean_text(primary.get("commune")),
+                "epci_code": clean_identifier(primary.get("epci_code")),
+                "epci_nom": clean_text(primary.get("epci_nom")),
+                "code_departement": clean_department_code(primary.get("dep_code")),
+                "departement": clean_text(primary.get("departement")),
+                "equipments_total": len(items),
+                "bassins_total": sum(1 for item in items if clean_text(item.get("famille_equipement")) == "Bassin de natation"),
+                "operational_status_code": clean_text(primary.get("operational_status_code")) or "verify",
+                "operational_status_label": clean_text(primary.get("operational_status_label")) or STATUS_LABELS["verify"],
+                "operational_status_reason": reason,
+                "status_source": clean_text(primary.get("status_source")),
+                "status_source_url": clean_text(primary.get("status_source_url")),
+                "status_reviewed_at": clean_text(primary.get("status_reviewed_at")),
+                "status_confidence": clean_text(primary.get("status_confidence")),
+                "status_verified_by": clean_text(primary.get("status_verified_by")),
+                "status_is_manual": clean_bool(primary.get("status_is_manual")),
+                "status_override_comment": clean_text(primary.get("status_override_comment")),
+                "survey_date_latest": max(survey_dates) if survey_dates else None,
+                "state_change_date_latest": max(state_change_dates) if state_change_dates else None,
+            }
+        )
+
+    return sorted(
+        rows,
+        key=lambda item: (
+            STATUS_PRIORITY.get(clean_text(item.get("operational_status_code")) or "verify", 99),
+            clean_text(item.get("departement")) or "",
+            clean_text(item.get("commune")) or "",
+            clean_text(item.get("installation")) or "",
+        ),
+    )
+
+
+def parse_iso_date(value: Any) -> date | None:
+    text = clean_text(value)
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
+
+
+def build_status_review_queue(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    queue: list[dict[str, Any]] = []
+    today = datetime.now(timezone.utc).date()
+
+    for row in rows:
+        if clean_bool(row.get("status_is_manual")) == 1:
+            continue
+
+        status_code = clean_text(row.get("operational_status_code")) or "verify"
+        survey_date = parse_iso_date(row.get("survey_date_latest"))
+        days_since_survey = (today - survey_date).days if survey_date else None
+
+        priority_score = 0
+        priority_label = "veille"
+        queue_reason = "Controle documentaire recommande."
+
+        if status_code == "temporary_closed":
+            priority_score = 100
+            priority_label = "prioritaire"
+            queue_reason = "Fermeture temporaire ou travaux signales dans Data ES."
+        elif status_code == "closed":
+            priority_score = 95
+            priority_label = "prioritaire"
+            queue_reason = "Fermeture ou hors service signales dans Data ES."
+        elif status_code == "verify":
+            priority_score = 85
+            priority_label = "prioritaire"
+            queue_reason = "Observation ambigue a confirmer localement."
+        elif status_code == "seasonal":
+            priority_score = 50
+            priority_label = "surveillance"
+            queue_reason = "Ouverture saisonniere a confirmer selon la periode."
+        elif days_since_survey is None or days_since_survey > 365:
+            priority_score = 35
+            priority_label = "surveillance"
+            queue_reason = "Ouvert probable sans verification manuelle recente."
+
+        if priority_score == 0:
+            continue
+
+        queue.append(
+            {
+                "priority_label": priority_label,
+                "priority_score": priority_score,
+                "id_installation": clean_identifier(row.get("id_installation")),
+                "installation": clean_text(row.get("installation")),
+                "commune": clean_text(row.get("commune")),
+                "departement": clean_text(row.get("departement")),
+                "epci_nom": clean_text(row.get("epci_nom")),
+                "operational_status_label": clean_text(row.get("operational_status_label")),
+                "operational_status_reason": clean_text(row.get("operational_status_reason")),
+                "status_source": clean_text(row.get("status_source")),
+                "survey_date_latest": clean_text(row.get("survey_date_latest")),
+                "state_change_date_latest": clean_text(row.get("state_change_date_latest")),
+                "days_since_survey": days_since_survey,
+                "search_hint": " ".join(
+                    filter(
+                        None,
+                        [
+                            clean_text(row.get("installation")),
+                            clean_text(row.get("commune")),
+                            "piscine",
+                        ],
+                    )
+                ),
+                "queue_reason": queue_reason,
+            }
+        )
+
+    return sorted(
+        queue,
+        key=lambda item: (
+            -int(item.get("priority_score") or 0),
+            clean_text(item.get("departement")) or "",
+            clean_text(item.get("commune")) or "",
+            clean_text(item.get("installation")) or "",
+        ),
+    )
+
+
+def load_extended_inventory() -> tuple[list[dict[str, Any]], int]:
+    if not EXTENDED_INVENTORY_FILE.exists():
+        return [], 0
+
+    installation_overrides, equipment_overrides, override_count = load_status_overrides()
     records: list[dict[str, Any]] = []
     with EXTENDED_INVENTORY_FILE.open(encoding="utf-8-sig", newline="") as handle:
         reader = csv.reader(handle, delimiter=";")
@@ -321,10 +795,22 @@ def load_extended_inventory() -> list[dict[str, Any]]:
                 continue
 
             padded = row + [""] * max(0, 113 - len(row))
+            installation_id = clean_identifier(padded[1])
+            equipment_id = clean_identifier(padded[0])
+            observation_installation = clean_text(padded[13])
+            observation_equipement = clean_text(padded[84])
+            status_override = equipment_overrides.get(equipment_id) or installation_overrides.get(installation_id)
+            operational_status = classify_operational_status(
+                installation_out_of_service_flag=clean_bool(padded[16]),
+                seasonal_only_flag=clean_bool(padded[83]),
+                observation_installation=observation_installation,
+                observation_equipement=observation_equipement,
+                override=status_override,
+            )
             records.append(
                 {
-                    "id_equipement": clean_identifier(padded[0]),
-                    "id_installation": clean_identifier(padded[1]),
+                    "id_equipement": equipment_id,
+                    "id_installation": installation_id,
                     "installation": clean_text(padded[3]),
                     "equipement": clean_text(padded[32]),
                     "code_commune": clean_commune_code(padded[8]),
@@ -341,6 +827,10 @@ def load_extended_inventory() -> list[dict[str, Any]]:
                     "code_type_equipement": clean_identifier(padded[90]),
                     "rnb_id": clean_identifier(padded[91]),
                     "uai": clean_identifier(padded[10]),
+                    "survey_date": clean_text(padded[2]),
+                    "state_change_date": clean_text(padded[14]),
+                    "observation_installation": observation_installation,
+                    "observation_equipement": observation_equipement,
                     "handicap_access_types": join_literal_list(padded[11]),
                     "transport_access_modes": join_literal_list(padded[12]),
                     "opening_authorized_flag": clean_bool(padded[41]),
@@ -368,10 +858,11 @@ def load_extended_inventory() -> list[dict[str, Any]]:
                     "longitude": clean_float(padded[109]),
                     "latitude": clean_float(padded[110]),
                     "activites": join_literal_list(padded[112]),
+                    **operational_status,
                 }
             )
 
-    return records
+    return records, override_count
 
 
 def sanitize_sources_table(frame: pd.DataFrame) -> pd.DataFrame:
@@ -402,9 +893,8 @@ def sanitize_sources_table(frame: pd.DataFrame) -> pd.DataFrame:
     return cleaned
 
 
-def augment_sources_table(frame: pd.DataFrame) -> pd.DataFrame:
-    additions = pd.DataFrame(
-        [
+def augment_sources_table(frame: pd.DataFrame, status_override_count: int) -> pd.DataFrame:
+    additions_rows = [
             {
                 "jeu": "12 Établissements scolaires géolocalisés",
                 "source": "Ministère de l'Éducation nationale · data.education.gouv.fr",
@@ -445,8 +935,19 @@ def augment_sources_table(frame: pd.DataFrame) -> pd.DataFrame:
                 "filtre": "TER + réseaux interurbains Hauts-de-France",
                 "usage_principal": "offre TC potentielle autour des communes, des installations et des établissements",
             },
-        ]
-    )
+    ]
+    if status_override_count > 0:
+        additions_rows.append(
+            {
+                "jeu": "17 Statuts d'exploitation vérifiés",
+                "source": "vérification manuelle locale",
+                "maille": "installation / équipement",
+                "millesime": "mise à jour locale",
+                "filtre": "surcouche au-dessus de Data ES",
+                "usage_principal": "correction des fermetures, travaux et statuts à confirmer",
+            }
+        )
+    additions = pd.DataFrame(additions_rows)
     return pd.concat([frame, additions], ignore_index=True)
 
 
@@ -2708,6 +3209,17 @@ def clean_text(value: Any) -> str | None:
     if not text or text.lower() in {"nan", "none", "null"}:
         return None
     return text
+
+
+def normalize_search_text(value: Any) -> str:
+    text = clean_text(value) or ""
+    if not text:
+        return ""
+    ascii_text = unicodedata.normalize("NFKD", text)
+    ascii_text = "".join(char for char in ascii_text if not unicodedata.combining(char))
+    ascii_text = ascii_text.lower()
+    ascii_text = re.sub(r"[^a-z0-9]+", "_", ascii_text)
+    return ascii_text.strip("_")
 
 
 def clean_identifier(value: Any) -> str | None:

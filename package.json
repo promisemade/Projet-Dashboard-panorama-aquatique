@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "data": "python scripts/build_data.py",
+    "audit-status-web": "python scripts/audit_installation_status_web.py",
     "dev": "npm run data && vite --host 127.0.0.1 --port 4173 --open",
     "build": "npm run data && vite build",
     "static": "npm run build",

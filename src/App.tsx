@@ -45,7 +45,10 @@ import type {
   EpciRecord,
   ExtendedInventoryRecord,
   GenericRecord,
+  InstallationStatusRecord,
+  InstallationStatusReviewQueueRecord,
   InstallationTransitRecord,
+  OperationalStatusCode,
   Overview,
   SchoolDemandInstallationRecord,
   SchoolDemandOverview,
@@ -85,7 +88,9 @@ type RawSheetKey =
   | "accessibility_epci"
   | "commune_transit"
   | "transit_epci"
-  | "installation_transit";
+  | "installation_transit"
+  | "installation_status"
+  | "status_review_queue";
 
 type DashboardTab = "overview" | "territories" | "facilities" | "licences" | "data";
 type OverviewView = "panorama" | "social" | "operations" | "school" | "access" | "transit";
@@ -106,7 +111,7 @@ interface PreparedRawSheet extends RawSheetDefinition {
   downloadPath?: string;
 }
 
-type MetricKind = "count" | "ratio" | "percent" | "duration" | "distance";
+type MetricKind = "count" | "ratio" | "percent" | "duration" | "distance" | "year";
 type InventoryCountMode = "equipments" | "installations";
 
 interface MetricOption {
@@ -152,6 +157,10 @@ type OperationalBasinRecord = BasinRecord &
   Pick<
     ExtendedInventoryRecord,
     | "uai"
+    | "survey_date"
+    | "state_change_date"
+    | "observation_installation"
+    | "observation_equipement"
     | "handicap_access_types"
     | "transport_access_modes"
     | "opening_authorized_flag"
@@ -162,6 +171,16 @@ type OperationalBasinRecord = BasinRecord &
     | "sensory_access_detail"
     | "seasonal_only_flag"
     | "installation_out_of_service_flag"
+    | "operational_status_code"
+    | "operational_status_label"
+    | "operational_status_reason"
+    | "status_source"
+    | "status_source_url"
+    | "status_reviewed_at"
+    | "status_confidence"
+    | "status_verified_by"
+    | "status_is_manual"
+    | "status_override_comment"
   >;
 
 interface OperationalInventorySummary {
@@ -183,6 +202,16 @@ interface OperationalInventorySummary {
   schoolTransportShare: number;
   schoolAccessibilityShare: number;
   schoolOperationalShare: number;
+}
+
+interface OperationalStatusSummary {
+  totalInstallations: number;
+  verifiedManual: number;
+  openProbable: number;
+  temporaryClosed: number;
+  closed: number;
+  seasonal: number;
+  verify: number;
 }
 
 interface OperationalTerritoryRow {
@@ -524,6 +553,24 @@ const RAW_SHEET_DEFINITIONS: RawSheetDefinition[] = [
       "Ancrage GTFS des installations aquatiques : distance à l'arrêt le plus proche et intensité théorique de desserte à pied.",
     exportSlug: "offre_tc_potentielle_installations",
     getRows: (data) => toRawRows(data.installation_transit),
+  },
+  {
+    key: "installation_status",
+    label: "21 Statuts installations",
+    sheetName: "Statuts exploitation",
+    description:
+      "Statut d'exploitation calculé à partir de Data ES, avec prise en compte d'une éventuelle vérification manuelle.",
+    exportSlug: "statuts_installations",
+    getRows: (data) => toRawRows(data.installation_status),
+  },
+  {
+    key: "status_review_queue",
+    label: "22 Controle statuts",
+    sheetName: "Controle prioritaire",
+    description:
+      "File de revue manuelle des installations a verifier en priorite avant diffusion ou interpretation locale.",
+    exportSlug: "controle_statuts_prioritaires",
+    getRows: (data) => toRawRows(data.status_review_queue),
   },
 ];
 
@@ -950,6 +997,8 @@ function App() {
           sex_2024: Array.isArray(payload.sex_2024) ? payload.sex_2024 : [],
           sources: Array.isArray(payload.sources) ? payload.sources : [],
           extended_inventory: Array.isArray(payload.extended_inventory) ? payload.extended_inventory : [],
+          installation_status: Array.isArray(payload.installation_status) ? payload.installation_status : [],
+          status_review_queue: Array.isArray(payload.status_review_queue) ? payload.status_review_queue : [],
           school_establishments: Array.isArray(payload.school_establishments)
             ? payload.school_establishments
             : [],
@@ -1158,6 +1207,10 @@ function App() {
         return {
           ...item,
           uai: extra?.uai ?? null,
+          survey_date: extra?.survey_date ?? null,
+          state_change_date: extra?.state_change_date ?? null,
+          observation_installation: extra?.observation_installation ?? null,
+          observation_equipement: extra?.observation_equipement ?? null,
           handicap_access_types: extra?.handicap_access_types ?? null,
           transport_access_modes: extra?.transport_access_modes ?? null,
           opening_authorized_flag: extra?.opening_authorized_flag ?? 0,
@@ -1168,6 +1221,16 @@ function App() {
           sensory_access_detail: extra?.sensory_access_detail ?? null,
           seasonal_only_flag: extra?.seasonal_only_flag ?? 0,
           installation_out_of_service_flag: extra?.installation_out_of_service_flag ?? 0,
+          operational_status_code: extra?.operational_status_code ?? "verify",
+          operational_status_label: extra?.operational_status_label ?? "Statut à vérifier",
+          operational_status_reason: extra?.operational_status_reason ?? null,
+          status_source: extra?.status_source ?? null,
+          status_source_url: extra?.status_source_url ?? null,
+          status_reviewed_at: extra?.status_reviewed_at ?? null,
+          status_confidence: extra?.status_confidence ?? null,
+          status_verified_by: extra?.status_verified_by ?? null,
+          status_is_manual: extra?.status_is_manual ?? 0,
+          status_override_comment: extra?.status_override_comment ?? null,
         };
       }),
     [filteredBasins, operationalInventoryByEquipmentId],
@@ -1180,6 +1243,10 @@ function App() {
         return {
           ...item,
           uai: extra?.uai ?? null,
+          survey_date: extra?.survey_date ?? null,
+          state_change_date: extra?.state_change_date ?? null,
+          observation_installation: extra?.observation_installation ?? null,
+          observation_equipement: extra?.observation_equipement ?? null,
           handicap_access_types: extra?.handicap_access_types ?? null,
           transport_access_modes: extra?.transport_access_modes ?? null,
           opening_authorized_flag: extra?.opening_authorized_flag ?? 0,
@@ -1190,6 +1257,16 @@ function App() {
           sensory_access_detail: extra?.sensory_access_detail ?? null,
           seasonal_only_flag: extra?.seasonal_only_flag ?? 0,
           installation_out_of_service_flag: extra?.installation_out_of_service_flag ?? 0,
+          operational_status_code: extra?.operational_status_code ?? "verify",
+          operational_status_label: extra?.operational_status_label ?? "Statut à vérifier",
+          operational_status_reason: extra?.operational_status_reason ?? null,
+          status_source: extra?.status_source ?? null,
+          status_source_url: extra?.status_source_url ?? null,
+          status_reviewed_at: extra?.status_reviewed_at ?? null,
+          status_confidence: extra?.status_confidence ?? null,
+          status_verified_by: extra?.status_verified_by ?? null,
+          status_is_manual: extra?.status_is_manual ?? 0,
+          status_override_comment: extra?.status_override_comment ?? null,
         };
       }),
     [operationalInventoryByEquipmentId, scopedBasins],
@@ -1246,6 +1323,46 @@ function App() {
       filteredOperationalBasins.find((item) => item.id_equipement === selectedFacilityBasin.id_equipement) ?? null
     );
   }, [filteredOperationalBasins, selectedFacilityBasin]);
+
+  const filteredInstallationStatusRows = useMemo(
+    () => {
+      const fallbackRows = buildInstallationStatusRows(filteredOperationalBasins);
+      if (!data || !Array.isArray(data.installation_status) || data.installation_status.length === 0) {
+        return fallbackRows;
+      }
+
+      const installationIds = new Set(
+        filteredOperationalBasins.map((item) => item.id_installation || item.id_equipement).filter(Boolean),
+      );
+      return data.installation_status.filter((item) => installationIds.has(item.id_installation));
+    },
+    [data, filteredOperationalBasins],
+  );
+
+  const operationalStatusSummary = useMemo(
+    () => buildOperationalStatusSummary(filteredInstallationStatusRows),
+    [filteredInstallationStatusRows],
+  );
+
+  const filteredStatusReviewQueueRows = useMemo<InstallationStatusReviewQueueRecord[]>(() => {
+    if (!data || !Array.isArray(data.status_review_queue) || data.status_review_queue.length === 0) {
+      return [];
+    }
+
+    const installationIds = new Set(filteredInstallationStatusRows.map((item) => item.id_installation));
+    return data.status_review_queue.filter((item) => item.id_installation && installationIds.has(item.id_installation));
+  }, [data, filteredInstallationStatusRows]);
+
+  const selectedFacilityInstallationStatus = useMemo(() => {
+    if (!selectedFacilityBasin) {
+      return null;
+    }
+
+    return (
+      filteredInstallationStatusRows.find((item) => item.id_installation === selectedFacilityBasin.id_installation) ??
+      null
+    );
+  }, [filteredInstallationStatusRows, selectedFacilityBasin]);
 
   const selectedFacilityInstallationInventory = useMemo(() => {
     if (!selectedFacilityBasin) {
@@ -1418,13 +1535,39 @@ function App() {
           ? "Usage scolaire explicite"
           : "Usage scolaire repéré"
         : "Pas de signal scolaire";
+    const statusDetail =
+      selectedFacilityInstallationStatus?.operational_status_reason ??
+      selectedFacilityOperational.operational_status_reason ??
+      "Lecture calculée à partir de Data ES.";
+    const verificationDetail =
+      selectedFacilityOperational.status_is_manual === 1
+        ? [
+            selectedFacilityOperational.status_source ?? "Source locale renseignée",
+            selectedFacilityOperational.status_reviewed_at
+              ? `vérifié le ${formatReviewDateLabel(selectedFacilityOperational.status_reviewed_at)}`
+              : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")
+        : "Aucune vérification locale renseignée.";
 
     return [
+      {
+        label: "Statut d'exploitation",
+        value: selectedFacilityOperational.operational_status_label,
+        detail: statusDetail,
+      },
+      {
+        label: "Vérification",
+        value:
+          selectedFacilityOperational.status_is_manual === 1 ? "Vérifié manuellement" : "Lecture Data ES calculée",
+        detail: verificationDetail,
+      },
       {
         label: "Mise en service",
         value:
           typeof selectedFacilityOperational.year_service === "number"
-            ? formatInteger(selectedFacilityOperational.year_service)
+            ? formatYear(selectedFacilityOperational.year_service)
             : "n.c.",
         detail: "Permet de lire l'ancienneté du bassin.",
       },
@@ -1432,7 +1575,7 @@ function App() {
         label: "Derniers gros travaux",
         value:
           typeof selectedFacilityOperational.last_major_works_year === "number"
-            ? formatInteger(selectedFacilityOperational.last_major_works_year)
+            ? formatYear(selectedFacilityOperational.last_major_works_year)
             : "n.c.",
         detail: hasRecentWorks(selectedFacilityOperational)
           ? "Signal de travaux récents dans Data ES."
@@ -1464,7 +1607,7 @@ function App() {
               : "Pas d'UAI renseignée.",
       },
     ];
-  }, [selectedFacilityOperational]);
+  }, [selectedFacilityInstallationStatus, selectedFacilityOperational]);
 
   const selectedFacilitySignalPills = useMemo(() => {
     if (!selectedFacilityBasin) {
@@ -1472,26 +1615,61 @@ function App() {
     }
 
     const pills = [
-      selectedFacilityBasin.mode_gestion_calcule,
-      getDetailedComparableBasinProfile(selectedFacilityBasin),
-      communeTypologyLookup.get(selectedFacilityBasin.code_commune) ?? "Typologie non renseignée",
-      selectedFacilityBasin.usage_scolaires === 1 ? "Usage scolaire" : "Hors signal scolaire",
-      selectedFacilityBasin.qpv_flag === 1
-        ? "En QPV"
-        : selectedFacilityBasin.qpv_200m_flag === 1
-          ? "À 200 m QPV"
-          : "Hors QPV",
+      {
+        label: selectedFacilityBasin.mode_gestion_calcule,
+        className: getFacilitySignalPillClassName(),
+      },
+      {
+        label: getDetailedComparableBasinProfile(selectedFacilityBasin),
+        className: getFacilitySignalPillClassName(),
+      },
+      {
+        label: communeTypologyLookup.get(selectedFacilityBasin.code_commune) ?? "Typologie non renseignée",
+        className: getFacilitySignalPillClassName(),
+      },
+      {
+        label: selectedFacilityBasin.usage_scolaires === 1 ? "Usage scolaire" : "Hors signal scolaire",
+        className: getFacilitySignalPillClassName(),
+      },
+      {
+        label:
+          selectedFacilityBasin.qpv_flag === 1
+            ? "En QPV"
+            : selectedFacilityBasin.qpv_200m_flag === 1
+              ? "À 200 m QPV"
+              : "Hors QPV",
+        className: getFacilitySignalPillClassName(),
+      },
     ];
 
     if (selectedFacilityOperational) {
+      pills.push({
+        label: selectedFacilityOperational.operational_status_label,
+        className: getOperationalStatusPillClassName(selectedFacilityOperational.operational_status_code),
+      });
+      pills.push({
+        label: selectedFacilityOperational.status_is_manual === 1 ? "Vérifié" : "Non vérifié",
+        className: getFacilitySignalPillClassName(
+          selectedFacilityOperational.status_is_manual === 1 ? "verified" : "default",
+        ),
+      });
       if (hasTransportAccess(selectedFacilityOperational)) {
-        pills.push("Transport renseigné");
+        pills.push({
+          label: "Transport renseigné",
+          className: getFacilitySignalPillClassName("transport"),
+        });
       }
       if (hasAccessibilitySupport(selectedFacilityOperational)) {
-        pills.push("Accessibilité renseignée");
+        pills.push({
+          label: "Accessibilité renseignée",
+          className: getFacilitySignalPillClassName("accessibility"),
+        });
       }
       if (hasRecentWorks(selectedFacilityOperational)) {
-        pills.push("Travaux récents");
+        pills.push({
+          label: "Travaux récents",
+          className: getFacilitySignalPillClassName("works"),
+        });
       }
     }
 
@@ -1505,11 +1683,11 @@ function App() {
 
     const operationalYear =
       selectedFacilityOperational && typeof selectedFacilityOperational.year_service === "number"
-        ? formatInteger(selectedFacilityOperational.year_service)
+        ? formatYear(selectedFacilityOperational.year_service)
         : "n.c.";
     const worksYear =
       selectedFacilityOperational && typeof selectedFacilityOperational.last_major_works_year === "number"
-        ? formatInteger(selectedFacilityOperational.last_major_works_year)
+        ? formatYear(selectedFacilityOperational.last_major_works_year)
         : "n.c.";
     const schoolLabel =
       selectedFacilityBasin.usage_scolaires === 1
@@ -1544,7 +1722,7 @@ function App() {
       },
       {
         label: "Exploitation",
-        title: `Mise en service ${operationalYear}`,
+        title: selectedFacilityOperational?.operational_status_label ?? `Mise en service ${operationalYear}`,
         detail:
           worksYear !== "n.c."
             ? `Derniers gros travaux ${worksYear} · ${operationalConditions.join(" + ") || "conditions partielles"}`
@@ -2775,7 +2953,7 @@ function App() {
         label: "Mise en service moyenne",
         value:
           summary.averageServiceYear > 0
-            ? formatInteger(Math.round(summary.averageServiceYear))
+            ? formatYear(summary.averageServiceYear)
             : "n.c.",
         detail: `${formatPercent(summary.yearCoverageShare)} du parc a ce champ renseigné`,
       },
@@ -3437,7 +3615,7 @@ function App() {
       },
       {
         label: "Mise en service moyenne",
-        kind: "count" as const,
+        kind: "year" as const,
         primary: territoryOperationalSummary.averageServiceYear,
         comparison: comparisonOperationalSummary.averageServiceYear,
       },
@@ -3973,7 +4151,7 @@ function App() {
             </strong>
           </div>
           <div className="meta-card">
-            <span className="meta-label">Données générées</span>
+            <span className="meta-label">Dernière actualisation</span>
             <strong>{formatDate(data.meta.generated_at)}</strong>
           </div>
         </div>
@@ -4389,7 +4567,7 @@ function App() {
                 <span className="summary-chip-label">Mise en service moyenne</span>
                 <strong>
                   {overviewOperationalSummary.averageServiceYear > 0
-                    ? formatInteger(Math.round(overviewOperationalSummary.averageServiceYear))
+                    ? formatYear(overviewOperationalSummary.averageServiceYear)
                     : "n.c."}
                 </strong>
                 <small>{formatPercent(overviewOperationalSummary.yearCoverageShare)} du parc renseigne ce champ.</small>
@@ -4490,7 +4668,7 @@ function App() {
                             <div>{shortDepartment(item.departement)}</div>
                           </td>
                           <td>{`${formatInteger(item.basins)} · ${formatInteger(item.installations)} sites`}</td>
-                          <td>{item.averageServiceYear > 0 ? formatInteger(Math.round(item.averageServiceYear)) : "n.c."}</td>
+                          <td>{item.averageServiceYear > 0 ? formatYear(item.averageServiceYear) : "n.c."}</td>
                           <td>{formatPercent(item.legacyShare)}</td>
                           <td>{formatPercent(item.recentWorksShare)}</td>
                           <td>{formatPercent(item.transportAccessShare)}</td>
@@ -6209,7 +6387,7 @@ function App() {
                     <span className="summary-chip-label">Mise en service</span>
                     <strong>
                       {selectedFacilityOperational?.year_service
-                        ? formatInteger(selectedFacilityOperational.year_service)
+                        ? formatYear(selectedFacilityOperational.year_service)
                         : "n.c."}
                     </strong>
                     <small>Repère d'ancienneté au niveau équipement.</small>
@@ -6227,9 +6405,9 @@ function App() {
                 </p>
 
                 <div className="signal-pill-row facility-sheet-badges" aria-label="Repères rapides équipement">
-                  {selectedFacilitySignalPills.map((item) => (
-                    <span key={item} className="signal-pill">
-                      {item}
+                  {selectedFacilitySignalPills.map((item, index) => (
+                    <span key={`${item.label}-${index}`} className={item.className}>
+                      {item.label}
                     </span>
                   ))}
                 </div>
@@ -7023,7 +7201,7 @@ function App() {
                 <span className="summary-chip-label">Mise en service moyenne</span>
                 <strong>
                   {operationalSummary.averageServiceYear > 0
-                    ? formatInteger(Math.round(operationalSummary.averageServiceYear))
+                    ? formatYear(operationalSummary.averageServiceYear)
                     : "n.c."}
                 </strong>
                 <small>{formatPercent(operationalSummary.yearCoverageShare)} du parc renseigne ce champ.</small>
@@ -7071,6 +7249,157 @@ function App() {
                   <small>Installations signalées hors service dans le brut Data ES.</small>
                 </div>
                 <strong>{formatPercent(operationalSummary.outOfServiceShare)}</strong>
+              </div>
+            </div>
+
+            <div className="breakdown-section">
+              <h3>Statut d'exploitation des installations</h3>
+              <div className="investigation-summary">
+                <article className="summary-chip">
+                  <span className="summary-chip-label">Ouvert probable</span>
+                  <strong>{formatInteger(operationalStatusSummary.openProbable)}</strong>
+                  <small>Sans signal de fermeture détecté dans Data ES.</small>
+                </article>
+                <article className="summary-chip">
+                  <span className="summary-chip-label">Fermé temporairement</span>
+                  <strong>{formatInteger(operationalStatusSummary.temporaryClosed)}</strong>
+                  <small>Travaux ou fermeture temporaire repérés.</small>
+                </article>
+                <article className="summary-chip">
+                  <span className="summary-chip-label">Fermé / hors service</span>
+                  <strong>{formatInteger(operationalStatusSummary.closed)}</strong>
+                  <small>Signal fort de fermeture ou hors service.</small>
+                </article>
+                <article className="summary-chip">
+                  <span className="summary-chip-label">Saisonnier</span>
+                  <strong>{formatInteger(operationalStatusSummary.seasonal)}</strong>
+                  <small>Ouverture exclusivement saisonnière.</small>
+                </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">À vérifier</span>
+                <strong>{formatInteger(operationalStatusSummary.verify)}</strong>
+                <small>Observation à confirmer localement.</small>
+              </article>
+              <article className="summary-chip">
+                <span className="summary-chip-label">Vérifiés manuellement</span>
+                <strong>{formatInteger(operationalStatusSummary.verifiedManual)}</strong>
+                <small>Statuts déjà contrôlés dans la surcouche locale.</small>
+              </article>
+            </div>
+
+            <div className="table-scroll">
+              <table className="raw-table">
+                <thead>
+                    <tr>
+                      <th>Installation</th>
+                      <th>Commune</th>
+                      <th>Statut</th>
+                      <th>Vérification</th>
+                      <th>Confiance</th>
+                      <th>Bassins</th>
+                      <th>Source</th>
+                      <th>Mise à jour</th>
+                      <th>Repère</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredInstallationStatusRows.map((row) => (
+                      <tr key={row.id_installation}>
+                        <td>
+                          <strong>{row.installation ?? "Installation non renseignée"}</strong>
+                          <br />
+                          <small>{row.epci_nom ?? "EPCI non renseigné"}</small>
+                        </td>
+                        <td>
+                          {row.commune ?? "n.c."}
+                          <br />
+                          <small>{row.departement ?? "n.c."}</small>
+                        </td>
+                        <td>
+                          <span className={`status-pill status-pill-${row.operational_status_code.replace(/_/g, "-")}`}>
+                            {row.operational_status_label}
+                          </span>
+                        </td>
+                        <td>{getStatusVerificationLabel(row)}</td>
+                        <td>{row.status_confidence ?? "n.c."}</td>
+                        <td>{formatInteger(row.bassins_total)}</td>
+                        <td>
+                          {row.status_source ?? "Data ES calculé"}
+                          {row.status_source_url ? (
+                            <>
+                              <br />
+                              <a href={row.status_source_url} target="_blank" rel="noreferrer">
+                                Ouvrir la source
+                              </a>
+                            </>
+                          ) : null}
+                        </td>
+                        <td>{formatReviewDateLabel(formatOperationalStatusUpdate(row))}</td>
+                        <td>
+                          <span className="cell-text">
+                            {row.operational_status_reason ?? row.status_override_comment ?? "Aucun détail disponible."}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {filteredInstallationStatusRows.length === 0 ? (
+                  <div className="empty-table">Aucune installation n'est disponible sur la sélection active.</div>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="breakdown-section">
+              <h3>File de contrôle prioritaire</h3>
+              <div className="table-scroll">
+                <table className="raw-table">
+                  <thead>
+                    <tr>
+                      <th>Priorité</th>
+                      <th>Installation</th>
+                      <th>Statut</th>
+                      <th>Pourquoi contrôler</th>
+                      <th>Dernier repère</th>
+                      <th>Recherche conseillée</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredStatusReviewQueueRows.slice(0, 30).map((row) => (
+                      <tr key={`${row.id_installation}-${row.priority_score}`}>
+                        <td>{row.priority_label}</td>
+                        <td>
+                          <strong>{row.installation ?? "Installation non renseignée"}</strong>
+                          <br />
+                          <small>
+                            {row.commune ?? "n.c."} · {row.departement ?? "n.c."}
+                          </small>
+                        </td>
+                        <td>{row.operational_status_label ?? "n.c."}</td>
+                        <td>
+                          <span className="cell-text">
+                            {row.queue_reason ?? row.operational_status_reason ?? "Contrôle recommandé."}
+                          </span>
+                        </td>
+                        <td>
+                          {row.state_change_date_latest
+                            ? formatReviewDateLabel(row.state_change_date_latest)
+                            : row.survey_date_latest
+                              ? formatReviewDateLabel(row.survey_date_latest)
+                              : "n.c."}
+                        </td>
+                        <td>
+                          <span className="cell-text">{row.search_hint ?? "n.c."}</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {filteredStatusReviewQueueRows.length === 0 ? (
+                  <div className="empty-table">
+                    Aucun contrôle prioritaire n'est remonté sur la sélection active.
+                  </div>
+                ) : null}
               </div>
             </div>
 
@@ -8385,6 +8714,166 @@ function hasOperationalSchoolConditions(item: OperationalBasinRecord) {
   return item.usage_scolaires === 1 && hasTransportAccess(item) && hasAccessibilitySupport(item) && item.opening_authorized_flag === 1;
 }
 
+function getOperationalStatusPriority(code: OperationalStatusCode) {
+  switch (code) {
+    case "closed":
+      return 0;
+    case "temporary_closed":
+      return 1;
+    case "verify":
+      return 2;
+    case "seasonal":
+      return 3;
+    case "open_probable":
+    default:
+      return 4;
+  }
+}
+
+function buildInstallationStatusRows(items: OperationalBasinRecord[]): InstallationStatusRecord[] {
+  const grouped = new Map<string, OperationalBasinRecord[]>();
+  items.forEach((item) => {
+    const key = item.id_installation || item.id_equipement;
+    const rows = grouped.get(key) ?? [];
+    rows.push(item);
+    grouped.set(key, rows);
+  });
+
+  return Array.from(grouped.entries())
+    .map(([installationId, rows]) => {
+      const sortedRows = [...rows].sort((left, right) => {
+        const priorityGap =
+          getOperationalStatusPriority(left.operational_status_code) -
+          getOperationalStatusPriority(right.operational_status_code);
+        if (priorityGap !== 0) {
+          return priorityGap;
+        }
+        return left.equipement.localeCompare(right.equipement, "fr");
+      });
+      const primary = sortedRows[0];
+      const surveyDates = rows.map((item) => item.survey_date).filter((value): value is string => Boolean(value));
+      const stateChangeDates = rows
+        .map((item) => item.state_change_date)
+        .filter((value): value is string => Boolean(value));
+
+      return {
+        id_installation: installationId,
+        installation: primary.installation,
+        code_commune: primary.code_commune,
+        commune: primary.commune,
+        epci_code: primary.epci_code,
+        epci_nom: primary.epci_nom,
+        code_departement: primary.dep_code,
+        departement: primary.departement,
+        equipments_total: rows.length,
+        bassins_total: rows.length,
+        operational_status_code: primary.operational_status_code,
+        operational_status_label: primary.operational_status_label,
+        operational_status_reason: primary.operational_status_reason,
+        status_source: primary.status_source,
+        status_source_url: primary.status_source_url,
+        status_reviewed_at: primary.status_reviewed_at,
+        status_confidence: primary.status_confidence,
+        status_verified_by: primary.status_verified_by,
+        status_is_manual: primary.status_is_manual,
+        status_override_comment: primary.status_override_comment,
+        survey_date_latest: surveyDates.sort().at(-1) ?? null,
+        state_change_date_latest: stateChangeDates.sort().at(-1) ?? null,
+      };
+    })
+    .sort((left, right) => {
+      const priorityGap =
+        getOperationalStatusPriority(left.operational_status_code) -
+        getOperationalStatusPriority(right.operational_status_code);
+      if (priorityGap !== 0) {
+        return priorityGap;
+      }
+      return `${left.departement ?? ""}${left.commune ?? ""}${left.installation ?? ""}`.localeCompare(
+        `${right.departement ?? ""}${right.commune ?? ""}${right.installation ?? ""}`,
+        "fr",
+      );
+    });
+}
+
+function buildOperationalStatusSummary(rows: InstallationStatusRecord[]): OperationalStatusSummary {
+  return rows.reduce<OperationalStatusSummary>(
+    (summary, row) => {
+      summary.totalInstallations += 1;
+      if (row.status_is_manual === 1) {
+        summary.verifiedManual += 1;
+      }
+      if (row.operational_status_code === "open_probable") {
+        summary.openProbable += 1;
+      } else if (row.operational_status_code === "temporary_closed") {
+        summary.temporaryClosed += 1;
+      } else if (row.operational_status_code === "closed") {
+        summary.closed += 1;
+      } else if (row.operational_status_code === "seasonal") {
+        summary.seasonal += 1;
+      } else {
+        summary.verify += 1;
+      }
+      return summary;
+    },
+    {
+      totalInstallations: 0,
+      verifiedManual: 0,
+      openProbable: 0,
+      temporaryClosed: 0,
+      closed: 0,
+      seasonal: 0,
+      verify: 0,
+    },
+  );
+}
+
+function formatOperationalStatusUpdate(row: InstallationStatusRecord) {
+  if (row.status_reviewed_at) {
+    return row.status_reviewed_at;
+  }
+  if (row.state_change_date_latest) {
+    return row.state_change_date_latest;
+  }
+  if (row.survey_date_latest) {
+    return row.survey_date_latest;
+  }
+  return "n.c.";
+}
+
+function getStatusVerificationLabel(row: InstallationStatusRecord) {
+  return row.status_is_manual === 1 ? "Vérifié manuellement" : "Non vérifié";
+}
+
+function getOperationalStatusPillClassName(statusCode: OperationalStatusCode) {
+  return `signal-pill status-pill status-pill-${statusCode.replace(/_/g, "-")}`;
+}
+
+function getFacilitySignalPillClassName(
+  kind: "default" | "verified" | "transport" | "accessibility" | "works" = "default",
+) {
+  if (kind === "default") {
+    return "signal-pill";
+  }
+  return `signal-pill signal-pill-${kind}`;
+}
+
+function formatReviewDateLabel(value: string | null) {
+  if (!value || value === "n.c.") {
+    return "n.c.";
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return new Intl.DateTimeFormat("fr-FR", { dateStyle: "medium" }).format(new Date(`${value}T00:00:00`));
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+
+  return formatDate(value);
+}
+
 function buildOperationalSummary(items: OperationalBasinRecord[]): OperationalInventorySummary {
   const serviceYears = items
     .map((item) => item.year_service)
@@ -9152,6 +9641,10 @@ function formatInteger(value: number) {
   return new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 0 }).format(value);
 }
 
+function formatYear(value: number) {
+  return String(Math.round(value));
+}
+
 function formatNumber(value: number, digits: number) {
   return new Intl.NumberFormat("fr-FR", {
     minimumFractionDigits: digits,
@@ -9191,6 +9684,9 @@ function formatMetricByKind(value: number, kind: MetricKind) {
   if (kind === "percent") {
     return formatPercent(value);
   }
+  if (kind === "year") {
+    return formatYear(value);
+  }
   if (kind === "count") {
     return formatInteger(value);
   }
@@ -9213,6 +9709,9 @@ function formatSignedPercent(value: number) {
 function formatSignedMetricByKind(value: number, kind: MetricKind) {
   if (kind === "percent") {
     return formatSignedPercent(value);
+  }
+  if (kind === "year") {
+    return formatSignedInteger(Math.round(value));
   }
   if (kind === "count") {
     return formatSignedInteger(value);

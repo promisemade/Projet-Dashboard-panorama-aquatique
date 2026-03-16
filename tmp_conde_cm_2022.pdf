@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="fr">
+<head>
+	<meta charset="UTF-8" />
+	<title>Erreur 404 &bull; Commune de Condé-en-Brie</title>
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<link rel="stylesheet" media="screen" type="text/css" title="CSS" href="css/style.css" />
+	<style type="text/css">
+		#conteneur{text-align:center; width:100%; padding:20px 10%; line-height:202%;background:#FFF;}
+		#conteneur img{margin-bottom:17px;}
+		#conteneur a{background:#416CEA;padding:12px 32px;color:#EEF;display:inline-block;margin-top:22px;}
+		#conteneur a:hover{background:#517CFA;}
+	</style>
+	 
+</head>
+<body>				
+	<div id="conteneur">
+		<img src="img/logo-conde.png" alt="Logo Conde"/>
+		<h1>Erreur 404 - Page non trouvée</h1>
+		<p>
+			La page que vous recherchez n'existe pas ou n'est plus disponible...<br />
+			Vous pouvez retourner sur la page d'accueil à l'aide du lien ci-dessous.<br />
+			<span class="semi-gras"><a href="https://www.conde-en-brie.fr/">https://www.conde-en-brie.fr</a></span>
+		</p>
+
+	</div>
+		
+</body>
+</html>
