@@ -5448,7 +5448,7 @@ function App() {
                     <span className="eyebrow">Repères rapides</span>
                 <h2>Comment lire cette vue</h2>
               </div>
-              <p>Trois rep?res pour distinguer vitesse d'acc?s moyenne et poches plus fragiles.</p>
+              <p>Trois repères pour distinguer vitesse d'accès moyenne et poches plus fragiles.</p>
             </div>
 
             <div className="message-stack">
@@ -8846,7 +8846,7 @@ function App() {
               <div className="panel-heading">
                 <div>
                   <span className="eyebrow">Licences 2024</span>
-                  <h2>Structure par ?ge et sexe</h2>
+                  <h2>Structure par âge et sexe</h2>
                 </div>
                 <p>
                   Distribution FFN à l'échelle {selectedDepartment === "all" ? "régionale" : "départementale"}.

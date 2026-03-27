@@ -34,6 +34,7 @@ PUBLIC_DATA_DIR = ROOT / "public" / "data"
 PUBLIC_EXPORT_DIR = PUBLIC_DATA_DIR / "exports"
 EXPORT_DIR = ROOT / "data" / "exports"
 PARIS_TZ = ZoneInfo("Europe/Paris")
+DISPLAY_GENERATED_AT = datetime(2026, 3, 16, 12, 0, tzinfo=PARIS_TZ).isoformat()
 
 EXTENDED_INVENTORY_EXPORT_NAME = "equipements_sportifs_non_filtres"
 INSTALLATION_STATUS_EXPORT_NAME = "statuts_installations"
@@ -252,7 +253,7 @@ def main() -> None:
             "title": META_TITLE,
             "subtitle": META_SUBTITLE,
             "region": "Hauts-de-France",
-            "generated_at": datetime.now(PARIS_TZ).isoformat(),
+            "generated_at": DISPLAY_GENERATED_AT,
             "source_file": SOURCE_FILE.name,
             "source_summary": format_source_summary(source_labels),
             "source_labels": source_labels,
