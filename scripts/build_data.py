@@ -19,6 +19,7 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import urlopen
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -32,6 +33,7 @@ TRANSPORT_CACHE_DIR = ROOT / "data" / "raw" / "transport"
 PUBLIC_DATA_DIR = ROOT / "public" / "data"
 PUBLIC_EXPORT_DIR = PUBLIC_DATA_DIR / "exports"
 EXPORT_DIR = ROOT / "data" / "exports"
+PARIS_TZ = ZoneInfo("Europe/Paris")
 
 EXTENDED_INVENTORY_EXPORT_NAME = "equipements_sportifs_non_filtres"
 INSTALLATION_STATUS_EXPORT_NAME = "statuts_installations"
@@ -250,12 +252,12 @@ def main() -> None:
             "title": META_TITLE,
             "subtitle": META_SUBTITLE,
             "region": "Hauts-de-France",
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at": datetime.now(PARIS_TZ).isoformat(),
             "source_file": SOURCE_FILE.name,
             "source_summary": format_source_summary(source_labels),
             "source_labels": source_labels,
             "source_updated_at": datetime.fromtimestamp(
-                SOURCE_FILE.stat().st_mtime, tz=timezone.utc
+                SOURCE_FILE.stat().st_mtime, tz=PARIS_TZ
             ).isoformat(),
         },
         "notes": notes,

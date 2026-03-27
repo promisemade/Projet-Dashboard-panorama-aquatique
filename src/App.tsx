@@ -4706,7 +4706,7 @@ function App() {
           </div>
           <div className="meta-card">
             <span className="meta-label">Dernière actualisation</span>
-            <strong>{formatDate(data.meta.generated_at)}</strong>
+            <strong>{formatDateOnly(data.meta.generated_at)}</strong>
           </div>
         </div>
       </section>
@@ -11355,5 +11355,10 @@ function formatDate(iso: string) {
   }).format(new Date(iso));
 }
 
-export default App;
+function formatDateOnly(iso: string) {
+  return new Intl.DateTimeFormat("fr-FR", {
+    dateStyle: "long",
+  }).format(new Date(iso));
+}
 
+export default App;
